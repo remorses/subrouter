@@ -1,9 +1,11 @@
 {
-  "name": "subrouter",
+  "name": "@subrouter/cli",
   "version": "0.0.0",
   "type": "module",
   "description": "Router for your personal AI subscriptions. Cycle through Anthropic, OpenAI, xAI and opencode subscriptions when one runs out of credits.",
-  "bin": "dist/cli.js",
+  "bin": {
+    "subrouter": "dist/cli.js"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "repository": {

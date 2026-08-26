@@ -52,22 +52,34 @@ the bare word `subrouter`:
 
 Only the **npm package name** must be scoped.
 
-### Current state
+### The two packages
+
+| Folder | Package | Notes |
+|---|---|---|
+| `cli/` | `@subrouter/cli` | Ships the `subrouter` binary |
+| `opencode/` | `@subrouter/opencode` | Depends on `@subrouter/cli` |
+
+Because `@subrouter/cli` is scoped, the `bin` field must be the **object form**.
+The string form (`"bin": "dist/cli.js"`) makes npm derive the binary name from
+the package name, which for a scoped package strips the scope and installs a
+binary called `cli`:
+
+```json
+"bin": {
+  "subrouter": "dist/cli.js"
+}
+```
+
+`@subrouter/opencode` imports the engine by package name, so a rename has to
+update these three places together:
+
+```
+opencode/package.json      "@subrouter/cli": "workspace:^"
+opencode/src/provider.ts   export { createSubrouter } from '@subrouter/cli'
+opencode/src/index.ts      import { DEFAULT_PRESET_NAME, loadPresets } from '@subrouter/cli'
+```
 
 Both packages are at version `0.0.0`, so **nothing has been published yet**.
-
-`cli/package.json` is still named `subrouter`, which is unpublishable. It needs a
-rename to a `@subrouter/*` name before the first release. Renaming it also
-requires updating the importers, which refer to the package by name:
-
-```
-opencode/package.json      "subrouter": "workspace:^"
-opencode/src/provider.ts   export { createSubrouter } from 'subrouter'
-opencode/src/index.ts      import { DEFAULT_PRESET_NAME, loadPresets } from 'subrouter'
-```
-
-Do not rename it unilaterally. The leaf name is a one-way decision once
-published, so confirm it first.
 
 ## Docs site
 

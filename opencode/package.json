@@ -50,7 +50,7 @@
   },
   "dependencies": {
     "errore": "^0.14.1",
-    "subrouter": "workspace:^"
+    "@subrouter/cli": "workspace:^"
   },
   "devDependencies": {
     "@opencode-ai/plugin": "^1.18.23",

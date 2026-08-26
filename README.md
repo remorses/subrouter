@@ -17,6 +17,8 @@ Every time one runs out of credits you stop working and start fixing subscriptio
 ## Quick Start
 
 ```bash
+npm i -g @subrouter/cli
+
 # add your subscriptions
 subrouter login anthropic
 subrouter login openai

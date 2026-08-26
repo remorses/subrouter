@@ -11,7 +11,7 @@
  */
 
 import type { Plugin } from '@opencode-ai/plugin'
-import { DEFAULT_PRESET_NAME, loadPresets } from 'subrouter'
+import { DEFAULT_PRESET_NAME, loadPresets } from '@subrouter/cli'
 
 function providerEntryUrl() {
   const isDev = import.meta.url.endsWith('.ts')

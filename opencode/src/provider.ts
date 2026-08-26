@@ -4,4 +4,4 @@
  * then `sdk.languageModel(modelId)` where modelId is a subrouter preset name.
  */
 
-export { createSubrouter } from 'subrouter'
+export { createSubrouter } from '@subrouter/cli'
