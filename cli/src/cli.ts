@@ -10,11 +10,9 @@
 import * as clack from '@clack/prompts'
 import { colors, goke, isAgent, openInBrowser } from 'goke'
 import { createRequire } from 'node:module'
-import os from 'node:os'
-import path from 'node:path'
 import { z } from 'zod'
 import dedent from 'string-dedent'
-import { adapters } from './adapters/index.ts'
+import { adapters, loadModelsDevCatalog, runLogin, validateModelsDevModelIds } from './adapters/index.ts'
 import { builtinDefaultPreset, DEFAULT_PRESET_NAME, resolveCandidates, resolvePresetModels } from './router.ts'
 import {
   accountLabel,
@@ -60,6 +58,20 @@ async function pickProvider(provided: string | undefined): Promise<ProviderId> {
   return choice
 }
 
+async function pickOpenAIMethod(provided: 'browser' | 'device' | undefined) {
+  if (provided) return provided
+  if (isAgent || !process.stdin.isTTY) return 'browser' as const
+  const choice = await clack.select({
+    message: 'How do you want to log in to ChatGPT?',
+    options: [
+      { value: 'browser' as const, label: 'Browser', hint: 'recommended' },
+      { value: 'device' as const, label: 'Device code', hint: 'may be disabled for your account' },
+    ],
+  })
+  if (clack.isCancel(choice)) process.exit(0)
+  return choice
+}
+
 function parsePresetModels(raw: string) {
   const models = raw
     .split(',')
@@ -91,12 +103,21 @@ cli
       Run it again with the same provider to add more accounts.
     `,
   )
+  .option(
+    '--method [method]',
+    z.enum(['browser', 'device']).optional().describe('OpenAI login method'),
+  )
   .example('subrouter login anthropic')
+  .example('subrouter login openai --method browser')
   .example('subrouter login xai')
-  .action(async (provider) => {
+  .action(async (provider, options) => {
     const id = await pickProvider(provider)
+    if (options.method && id !== 'openai') fail('`--method` is only supported for OpenAI login')
+    const method = id === 'openai' ? await pickOpenAIMethod(options.method) : undefined
     const adapter = adapters[id]
-    const account = await adapter.login({
+    const account = await runLogin({
+      adapter,
+      beginLoginArgs: { method },
       log: (message) => {
         console.error(message)
       },
@@ -217,6 +238,7 @@ cli
     dedent`
       Create (or overwrite) a preset: an ordered list of \`provider/model\`
       entries that subrouter falls through when subscriptions hit limits.
+      Model IDs are validated against models.dev before saving.
       Use the preset in opencode as model \`subrouter/<name>\`.
     `,
   )
@@ -236,6 +258,10 @@ cli
       return input
     })()
     const models = parsePresetModels(raw)
+    const catalog = await loadModelsDevCatalog()
+    if (catalog instanceof Error) fail(catalog.message)
+    const invalidModel = validateModelsDevModelIds({ entries: models, catalog })
+    if (invalidModel instanceof Error) fail(invalidModel.message)
     await savePreset({ name, models })
     console.log(colors.green(`Preset ${name} saved:`))
     models.forEach((entry, index) => {
@@ -315,35 +341,6 @@ cli
   .action(async () => {
     await clearCooldowns()
     console.log('Cleared all cooldowns')
-  })
-
-// --- opencode install ---
-
-cli
-  .command('install opencode', 'Register the @subrouter/opencode plugin in your opencode config')
-  .action(async (_options, { fs }) => {
-    const configDir = process.env.XDG_CONFIG_HOME
-      ? path.join(process.env.XDG_CONFIG_HOME, 'opencode')
-      : path.join(os.homedir(), '.config', 'opencode')
-    const configPath = path.join(configDir, 'opencode.json')
-    const raw = await fs.readFile(configPath, 'utf8').catch(() => '{}')
-    const rawText = typeof raw === 'string' ? raw : new TextDecoder().decode(raw)
-    const config = (() => {
-      try {
-        return JSON.parse(rawText) as Record<string, unknown>
-      } catch {
-        fail(`Could not parse existing config at ${configPath}. Fix it first.`)
-      }
-    })()
-    const plugins = Array.isArray(config.plugin) ? (config.plugin as string[]) : []
-    if (!plugins.some((entry) => entry.startsWith('@subrouter/opencode'))) {
-      plugins.push('@subrouter/opencode')
-    }
-    config.plugin = plugins
-    await fs.mkdir(configDir, { recursive: true })
-    await fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8')
-    console.log(colors.green('Registered @subrouter/opencode plugin in opencode config.'))
-    console.log('Restart opencode, then pick a model like subrouter/default.')
   })
 
 cli.help()

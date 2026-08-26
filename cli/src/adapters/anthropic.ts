@@ -16,7 +16,14 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import * as errore from 'errore'
 import { createServer, type Server } from 'node:http'
 import type { StoredAccount } from '../store.ts'
-import { isPermanentRefreshFailure, resolveBaseUrl, type LoginArgs, type PersistTokens, type ProviderAdapter } from './index.ts'
+import {
+  isPermanentRefreshFailure,
+  resolveBaseUrl,
+  type BeginLoginArgs,
+  type LoginSession,
+  type PersistTokens,
+  type ProviderAdapter,
+} from './index.ts'
 
 export class AnthropicAuthError extends errore.createTaggedError({
   name: 'AnthropicAuthError',
@@ -209,7 +216,52 @@ function parseManualInput(input: string): CallbackResult {
   return { code: input, state: '' }
 }
 
-async function login(args: LoginArgs): Promise<Error | StoredAccount> {
+/**
+ * Resolve the authorization code, from the localhost callback or from a value
+ * the user pasted back. A pasted value still yields to the callback if that
+ * already fired, because the callback carries the verified `state`.
+ */
+async function resolveCallbackResult({
+  callbackServer,
+  input,
+}: {
+  callbackServer: Awaited<ReturnType<typeof startCallbackServer>>
+  input: string | undefined
+}): Promise<AnthropicAuthError | CallbackResult> {
+  try {
+    const trimmed = input?.trim()
+    if (trimmed) {
+      const quick = await Promise.race([
+        callbackServer.waitForCode(),
+        new Promise<null>((r) => {
+          setTimeout(() => {
+            r(null)
+          }, 50)
+        }),
+      ])
+      if (quick?.code) return quick
+      return parseManualInput(trimmed)
+    }
+
+    const result = await Promise.race([
+      callbackServer.waitForCode(),
+      new Promise<null>((r) => {
+        setTimeout(() => {
+          r(null)
+        }, OAUTH_TIMEOUT_MS)
+      }),
+    ])
+    if (!result?.code) {
+      return new AnthropicAuthError({ reason: 'timed out waiting for OAuth callback' })
+    }
+    return result
+  } finally {
+    callbackServer.cancelWait()
+    callbackServer.server.close()
+  }
+}
+
+async function beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> {
   const pkce = await generatePKCE()
   const callbackServer = await startCallbackServer(pkce.verifier).catch(
     (e) => new AnthropicAuthError({ reason: 'failed to start callback server', cause: e }),
@@ -226,53 +278,49 @@ async function login(args: LoginArgs): Promise<Error | StoredAccount> {
     code_challenge_method: 'S256',
     state: pkce.verifier,
   })
-  const url = `https://claude.ai/oauth/authorize?${authParams.toString()}`
 
-  args.log(`Open this URL to authorize Claude Pro/Max:`)
-  args.log(url)
-  await args.openUrl(url)
+  let pending: Promise<Error | StoredAccount> | undefined
 
-  const result = await (async (): Promise<CallbackResult | null> => {
-    const timeout = new Promise<null>((r) => {
-      setTimeout(() => {
-        r(null)
-      }, OAUTH_TIMEOUT_MS)
-    })
-    const manual = (async (): Promise<CallbackResult | null> => {
-      if (!args.promptManualInput) return new Promise(() => {})
-      const input = await args.promptManualInput()
-      if (!input) return null
-      return parseManualInput(input.trim())
-    })()
-    return Promise.race([callbackServer.waitForCode(), manual, timeout])
-  })().finally(() => {
-    callbackServer.cancelWait()
-    callbackServer.server.close()
-  })
-
-  if (!result?.code) return new AnthropicAuthError({ reason: 'timed out waiting for OAuth callback' })
-
-  const tokens = await postTokenRequest({
-    grant_type: 'authorization_code',
-    client_id: CLIENT_ID,
-    code: result.code,
-    state: result.state || pkce.verifier,
-    redirect_uri: REDIRECT_URI,
-    code_verifier: pkce.verifier,
-  })
-  if (tokens instanceof Error) return tokens
-
-  const identity = await fetchAccountIdentity(tokens.access_token)
-  const now = Date.now()
   return {
-    type: 'oauth',
-    refresh: tokens.refresh_token,
-    access: tokens.access_token,
-    expires: tokenExpiry(tokens.expires_in),
-    email: identity?.email,
-    accountId: identity?.accountId,
-    addedAt: now,
-    lastUsed: now,
+    url: `https://claude.ai/oauth/authorize?${authParams.toString()}`,
+    instructions: args?.manualInput
+      ? 'Authorize Claude Pro/Max in your browser, then paste the final redirect URL from the address bar. Pasting just the authorization code also works.'
+      : 'Authorize Claude Pro/Max in your browser on this machine. The localhost callback completes the login automatically.',
+    method: args?.manualInput ? 'code' : 'auto',
+    complete(input) {
+      pending ??= (async () => {
+        const result = await resolveCallbackResult({ callbackServer, input })
+        if (result instanceof Error) return result
+
+        const tokens = await postTokenRequest({
+          grant_type: 'authorization_code',
+          client_id: CLIENT_ID,
+          code: result.code,
+          state: result.state || pkce.verifier,
+          redirect_uri: REDIRECT_URI,
+          code_verifier: pkce.verifier,
+        })
+        if (tokens instanceof Error) return tokens
+
+        const identity = await fetchAccountIdentity(tokens.access_token)
+        const now = Date.now()
+        return {
+          type: 'oauth',
+          refresh: tokens.refresh_token,
+          access: tokens.access_token,
+          expires: tokenExpiry(tokens.expires_in),
+          email: identity?.email,
+          accountId: identity?.accountId,
+          addedAt: now,
+          lastUsed: now,
+        } satisfies StoredAccount
+      })()
+      return pending
+    },
+    cancel() {
+      callbackServer.cancelWait()
+      callbackServer.server.close()
+    },
   }
 }
 
@@ -579,5 +627,5 @@ export const anthropicAdapter: ProviderAdapter = {
     })
     return provider.languageModel(modelId)
   },
-  login,
+  beginLogin,
 }

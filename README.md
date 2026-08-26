@@ -23,12 +23,17 @@ Every time one runs out of credits you stop working and start fixing subscriptio
 npx @subrouter/cli login anthropic
 npx @subrouter/cli login openai
 npx @subrouter/cli login xai
-
-# register the opencode plugin
-npx @subrouter/cli install opencode
-
-# in opencode, pick the model: subrouter/default
 ```
+
+Add `@subrouter/opencode` to the `plugin` array in `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "plugin": ["@subrouter/opencode"]
+}
+```
+
+Restart OpenCode, then pick the model `subrouter/default`.
 
 When Claude hits its usage limit mid-session, the next request transparently goes to your ChatGPT subscription. When that one is exhausted too, it goes to Grok.
 
@@ -84,12 +89,12 @@ Presets are ordered lists of `provider/model` entries. Every preset shows up as 
 
 ## Supported subscriptions
 
-| Provider    | Subscription                       | Login flow                       |
-| ----------- | ---------------------------------- | -------------------------------- |
-| `anthropic` | Claude Pro / Max                   | OAuth (browser, PKCE)            |
-| `openai`    | ChatGPT Plus / Pro (Codex backend) | Device code                      |
-| `xai`       | SuperGrok / Grok Build             | Device code                      |
-| `opencode`  | opencode Go (OpenCode Zen)         | API key from console.opencode.ai |
+| Provider    | Subscription                       | Login flow                          |
+| ----------- | ---------------------------------- | ----------------------------------- |
+| `anthropic` | Claude Pro / Max                   | OAuth (browser, PKCE)               |
+| `openai`    | ChatGPT Plus / Pro (Codex backend) | Browser OAuth (PKCE) or device code |
+| `xai`       | SuperGrok / Grok Build             | Device code                         |
+| `opencode`  | opencode Go (OpenCode Zen)         | API key from console.opencode.ai    |
 
 Anthropic OAuth only works if the requests look like **Claude Code CLI** requests. Subrouter rewrites them for you: system prompt identity, tool names, and beta headers.
 
@@ -108,7 +113,6 @@ npx @subrouter/cli preset remove <name>
 
 npx @subrouter/cli status                   # everything at a glance
 npx @subrouter/cli cooldown clear           # retry every account now
-npx @subrouter/cli install opencode         # register the opencode plugin
 ```
 
 Prefer a short command? Install it globally and every example becomes `subrouter <command>`:
@@ -121,13 +125,7 @@ The `default` preset is built in: the newest model of each provider you are logg
 
 ## OpenCode plugin
 
-`@subrouter/opencode` registers a `subrouter` provider inside opencode via the plugin `config` hook. Each preset becomes a model. Install it with:
-
-```bash
-npx @subrouter/cli install opencode
-```
-
-or manually in `~/.config/opencode/opencode.json`:
+`@subrouter/opencode` registers a `subrouter` provider inside opencode via the plugin `config` hook. Each preset becomes a model. Add it to `~/.config/opencode/opencode.json`:
 
 ```json
 {
@@ -179,10 +177,17 @@ The e2e test boots a real `opencode serve`, points the adapters at fake endpoint
 
 ## Environment variables
 
-| Variable                       | Purpose                                     |
-| ------------------------------ | ------------------------------------------- |
-| `SUBROUTER_HOME`               | State directory (default `~/.subrouter`)    |
-| `SUBROUTER_ANTHROPIC_BASE_URL` | Override the Anthropic API base URL (tests) |
-| `SUBROUTER_OPENAI_BASE_URL`    | Override the Codex API base URL (tests)     |
-| `SUBROUTER_XAI_BASE_URL`       | Override the xAI API base URL (tests)       |
-| `SUBROUTER_OPENCODE_BASE_URL`  | Override the OpenCode Zen base URL (tests)  |
+| Variable                       | Purpose                                                      |
+| ------------------------------ | ------------------------------------------------------------ |
+| `SUBROUTER_HOME`               | State directory (default `~/.subrouter`)                     |
+| `SUBROUTER_MANUAL_OAUTH`       | Browser is on another machine: ask for a pasted redirect URL |
+| `SUBROUTER_ANTHROPIC_BASE_URL` | Override the Anthropic API base URL (tests)                  |
+| `SUBROUTER_OPENAI_BASE_URL`    | Override the Codex API base URL (tests)                      |
+| `SUBROUTER_OPENAI_ISSUER_URL`  | Override the OpenAI auth host (tests)                        |
+| `SUBROUTER_XAI_BASE_URL`       | Override the xAI API base URL (tests)                        |
+| `SUBROUTER_OPENCODE_BASE_URL`  | Override the OpenCode Zen base URL (tests)                   |
+
+Set `SUBROUTER_MANUAL_OAUTH=1` when the browser that authorizes is not on the
+machine running subrouter. The localhost callback can never fire there, so the
+anthropic flow switches to asking for the redirect URL instead. Harnesses that
+drive login remotely (kimaki's Discord `/login`) set this for you.

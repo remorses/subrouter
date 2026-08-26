@@ -1,17 +1,25 @@
 /**
  * OpenAI ChatGPT Plus/Pro subscription adapter (Codex backend).
  *
- * Login uses the Codex headless device flow against auth.openai.com. The
- * request path injects the OAuth bearer plus the ChatGPT-Account-Id header
- * and rewrites the API URL to the Codex responses endpoint at chatgpt.com.
+ * Login supports Codex browser PKCE and headless device flows against
+ * auth.openai.com. The request path injects the OAuth bearer plus the
+ * ChatGPT-Account-Id header and rewrites the API URL to the Codex responses
+ * endpoint at chatgpt.com.
  * Ported from opencode's bundled CodexAuthPlugin
  * (packages/opencode/src/plugin/openai/codex.ts).
  */
 
 import { createOpenAI } from '@ai-sdk/openai'
 import * as errore from 'errore'
+import { createServer } from 'node:http'
 import type { StoredAccount } from '../store.ts'
-import { resolveBaseUrl, type LoginArgs, type PersistTokens, type ProviderAdapter } from './index.ts'
+import {
+  resolveBaseUrl,
+  type BeginLoginArgs,
+  type LoginSession,
+  type PersistTokens,
+  type ProviderAdapter,
+} from './index.ts'
 
 export class OpenAIAuthError extends errore.createTaggedError({
   name: 'OpenAIAuthError',
@@ -21,6 +29,9 @@ export class OpenAIAuthError extends errore.createTaggedError({
 const CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann'
 const ISSUER = 'https://auth.openai.com'
 const CODEX_API_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses'
+const OAUTH_PORT = 1455
+const OAUTH_CALLBACK_PATH = '/auth/callback'
+const OAUTH_TIMEOUT_MS = 5 * 60 * 1000
 const POLL_SAFETY_MARGIN_MS = 3_000
 
 type TokenResponse = {
@@ -74,37 +85,167 @@ async function sleep(ms: number) {
   })
 }
 
-// --- Login (Codex headless device flow) ---
+// --- Login ---
 
-async function login(args: LoginArgs): Promise<Error | StoredAccount> {
-  const deviceResponse = await fetch(`${ISSUER}/api/accounts/deviceauth/usercode`, {
+/** Auth host. Overridable so tests can point the device flow at a local server. */
+function issuerUrl() {
+  return resolveBaseUrl({ envVar: 'SUBROUTER_OPENAI_ISSUER_URL', fallback: ISSUER })
+}
+
+async function generatePKCE() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~'
+  const verifier = Array.from(
+    crypto.getRandomValues(new Uint8Array(43)),
+    (byte) => chars[byte % chars.length],
+  ).join('')
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+  return { verifier, challenge: Buffer.from(hash).toString('base64url') }
+}
+
+export function buildOpenAIAuthorizeUrl({
+  redirectUri,
+  challenge,
+  state,
+  issuer = ISSUER,
+}: {
+  redirectUri: string
+  challenge: string
+  state: string
+  issuer?: string
+}) {
+  const params = new URLSearchParams({
+    response_type: 'code',
+    client_id: CLIENT_ID,
+    redirect_uri: redirectUri,
+    scope: 'openid profile email offline_access',
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    id_token_add_organizations: 'true',
+    codex_cli_simplified_flow: 'true',
+    state,
+    originator: 'opencode',
+  })
+  return `${issuer}/oauth/authorize?${params.toString()}`
+}
+
+function accountFromTokens(tokens: TokenResponse): StoredAccount {
+  const identity = extractOpenAIIdentity(tokens)
+  const now = Date.now()
+  return {
+    type: 'oauth',
+    refresh: tokens.refresh_token,
+    access: tokens.access_token,
+    expires: now + (tokens.expires_in ?? 3600) * 1000,
+    email: identity.email,
+    accountId: identity.accountId,
+    addedAt: now,
+    lastUsed: now,
+  }
+}
+
+async function exchangeCode({
+  code,
+  redirectUri,
+  verifier,
+  issuer,
+}: {
+  code: string
+  redirectUri: string
+  verifier: string
+  issuer: string
+}) {
+  const response = await fetch(`${issuer}/oauth/token`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'User-Agent': 'subrouter' },
-    body: JSON.stringify({ client_id: CLIENT_ID }),
-  }).catch((e) => new OpenAIAuthError({ reason: 'device authorization request failed', cause: e }))
-  if (deviceResponse instanceof Error) return deviceResponse
-  if (!deviceResponse.ok) {
-    return new OpenAIAuthError({ reason: `device authorization returned ${deviceResponse.status}` })
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: redirectUri,
+      client_id: CLIENT_ID,
+      code_verifier: verifier,
+    }).toString(),
+  }).catch((e) => new OpenAIAuthError({ reason: 'token exchange failed', cause: e }))
+  if (response instanceof Error) return response
+  if (!response.ok) {
+    return new OpenAIAuthError({ reason: `token exchange returned ${response.status}` })
   }
+  return accountFromTokens((await response.json()) as TokenResponse)
+}
 
-  const deviceData = (await deviceResponse.json()) as {
-    device_auth_id: string
-    user_code: string
-    interval: string
+async function startCallbackServer({ state }: { state: string }) {
+  let settle: ((value: string | OpenAIAuthError) => void) | undefined
+  const result = new Promise<string | OpenAIAuthError>((resolve) => {
+    settle = resolve
+  })
+  const server = createServer((request, response) => {
+    const url = new URL(request.url || '/', `http://localhost:${OAUTH_PORT}`)
+    if (url.pathname !== OAUTH_CALLBACK_PATH) {
+      response.writeHead(404).end('Not found')
+      return
+    }
+
+    const error = url.searchParams.get('error_description') || url.searchParams.get('error')
+    const code = url.searchParams.get('code')
+    if (error) {
+      settle?.(new OpenAIAuthError({ reason: error }))
+      response.writeHead(400).end(`Authorization failed: ${error}`)
+      return
+    }
+    if (!code || url.searchParams.get('state') !== state) {
+      const reason = code ? 'invalid OAuth state' : 'missing authorization code'
+      settle?.(new OpenAIAuthError({ reason }))
+      response.writeHead(400).end(`Authorization failed: ${reason}`)
+      return
+    }
+
+    settle?.(code)
+    response.writeHead(200).end('Authorization successful. You can close this window.')
+  })
+
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject)
+    server.listen(OAUTH_PORT, 'localhost', resolve)
+  })
+  return { server, waitForCode: () => result }
+}
+
+function codeFromManualInput({ input, state }: { input: string | undefined; state: string }) {
+  const value = input?.trim()
+  if (!value) return new OpenAIAuthError({ reason: 'no authorization code provided' })
+  const parsed = errore.try(() => new URL(value))
+  if (parsed instanceof Error) return value
+  const error = parsed.searchParams.get('error_description') || parsed.searchParams.get('error')
+  if (error) return new OpenAIAuthError({ reason: error })
+  const callbackState = parsed.searchParams.get('state')
+  if (callbackState && callbackState !== state) {
+    return new OpenAIAuthError({ reason: 'invalid OAuth state' })
   }
-  const interval = Math.max(parseInt(deviceData.interval) || 5, 1) * 1000
+  return parsed.searchParams.get('code') || new OpenAIAuthError({ reason: 'missing authorization code' })
+}
 
-  args.log(`Open ${ISSUER}/codex/device and enter code: ${deviceData.user_code}`)
-  await args.openUrl(`${ISSUER}/codex/device`)
+type DeviceAuth = {
+  device_auth_id: string
+  user_code: string
+  interval: string
+}
 
+async function pollDeviceToken({
+  device,
+  issuer,
+}: {
+  device: DeviceAuth
+  issuer: string
+}): Promise<Error | StoredAccount> {
+  const interval = Math.max(parseInt(device.interval) || 5, 1) * 1000
   const deadline = Date.now() + 10 * 60 * 1000
+
   while (Date.now() < deadline) {
-    const response = await fetch(`${ISSUER}/api/accounts/deviceauth/token`, {
+    const response = await fetch(`${issuer}/api/accounts/deviceauth/token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'User-Agent': 'subrouter' },
       body: JSON.stringify({
-        device_auth_id: deviceData.device_auth_id,
-        user_code: deviceData.user_code,
+        device_auth_id: device.device_auth_id,
+        user_code: device.user_code,
       }),
     }).catch((e) => new OpenAIAuthError({ reason: 'device token poll failed', cause: e }))
     if (response instanceof Error) return response
@@ -114,34 +255,12 @@ async function login(args: LoginArgs): Promise<Error | StoredAccount> {
         authorization_code: string
         code_verifier: string
       }
-      const tokenResponse = await fetch(`${ISSUER}/oauth/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          code: data.authorization_code,
-          redirect_uri: `${ISSUER}/deviceauth/callback`,
-          client_id: CLIENT_ID,
-          code_verifier: data.code_verifier,
-        }).toString(),
-      }).catch((e) => new OpenAIAuthError({ reason: 'token exchange failed', cause: e }))
-      if (tokenResponse instanceof Error) return tokenResponse
-      if (!tokenResponse.ok) {
-        return new OpenAIAuthError({ reason: `token exchange returned ${tokenResponse.status}` })
-      }
-      const tokens = (await tokenResponse.json()) as TokenResponse
-      const identity = extractOpenAIIdentity(tokens)
-      const now = Date.now()
-      return {
-        type: 'oauth',
-        refresh: tokens.refresh_token,
-        access: tokens.access_token,
-        expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-        email: identity.email,
-        accountId: identity.accountId,
-        addedAt: now,
-        lastUsed: now,
-      }
+      return exchangeCode({
+        code: data.authorization_code,
+        redirectUri: `${issuer}/deviceauth/callback`,
+        verifier: data.code_verifier,
+        issuer,
+      })
     }
 
     if (response.status !== 403 && response.status !== 404) {
@@ -150,6 +269,83 @@ async function login(args: LoginArgs): Promise<Error | StoredAccount> {
     await sleep(interval + POLL_SAFETY_MARGIN_MS)
   }
   return new OpenAIAuthError({ reason: 'device authorization timed out' })
+}
+
+async function beginDeviceLogin(): Promise<Error | LoginSession> {
+  const issuer = issuerUrl()
+  const deviceResponse = await fetch(`${issuer}/api/accounts/deviceauth/usercode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'User-Agent': 'subrouter' },
+    body: JSON.stringify({ client_id: CLIENT_ID }),
+  }).catch((e) => new OpenAIAuthError({ reason: 'device authorization request failed', cause: e }))
+  if (deviceResponse instanceof Error) return deviceResponse
+  if (!deviceResponse.ok) {
+    return new OpenAIAuthError({ reason: `device authorization returned ${deviceResponse.status}` })
+  }
+
+  const device = (await deviceResponse.json()) as DeviceAuth
+  let pending: Promise<Error | StoredAccount> | undefined
+
+  return {
+    url: `${issuer}/codex/device`,
+    // The `code: X` shape is load bearing; harnesses regex it to show the code.
+    instructions: `Open ${issuer}/codex/device and enter code: ${device.user_code}`,
+    method: 'auto',
+    complete() {
+      pending ??= pollDeviceToken({ device, issuer })
+      return pending
+    },
+  }
+}
+
+async function beginBrowserLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> {
+  const issuer = issuerUrl()
+  const redirectUri = `http://localhost:${OAUTH_PORT}${OAUTH_CALLBACK_PATH}`
+  const pkce = await generatePKCE()
+  const state = Buffer.from(crypto.getRandomValues(new Uint8Array(32))).toString('base64url')
+  const callbackServer = args?.manualInput
+    ? undefined
+    : await startCallbackServer({ state }).catch(
+        (e) => new OpenAIAuthError({ reason: 'failed to start callback server', cause: e }),
+      )
+  if (callbackServer instanceof Error) return callbackServer
+
+  let pending: Promise<Error | StoredAccount> | undefined
+  return {
+    url: buildOpenAIAuthorizeUrl({
+      redirectUri,
+      challenge: pkce.challenge,
+      state,
+      issuer,
+    }),
+    instructions: args?.manualInput
+      ? 'Authorize ChatGPT in your browser, then paste the final localhost redirect URL.'
+      : 'Authorize ChatGPT in your browser. The localhost callback completes login automatically.',
+    method: args?.manualInput ? 'code' : 'auto',
+    complete(input) {
+      pending ??= (async () => {
+        const code = callbackServer
+          ? await Promise.race([
+              callbackServer.waitForCode(),
+              new Promise<OpenAIAuthError>((resolve) => {
+                const timeout = setTimeout(() => {
+                  resolve(new OpenAIAuthError({ reason: 'OAuth callback timed out' }))
+                }, OAUTH_TIMEOUT_MS)
+                timeout.unref()
+              }),
+            ])
+          : codeFromManualInput({ input, state })
+        callbackServer?.server.close()
+        if (code instanceof Error) return code
+        return exchangeCode({ code, redirectUri, verifier: pkce.verifier, issuer })
+      })()
+      return pending
+    },
+    cancel() {
+      callbackServer?.server.unref()
+      callbackServer?.server.close()
+    },
+  }
 }
 
 // --- Refresh + fetch ---
@@ -293,5 +489,9 @@ export const openaiAdapter: ProviderAdapter = {
     })
     return provider.responses(modelId)
   },
-  login,
+  async beginLogin(args) {
+    if (!args?.method || args.method === 'browser') return beginBrowserLogin(args)
+    if (args.method === 'device') return beginDeviceLogin()
+    return new OpenAIAuthError({ reason: `unknown login method ${args.method}` })
+  },
 }

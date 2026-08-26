@@ -1,7 +1,13 @@
 import { APICallError } from '@ai-sdk/provider'
 import { describe, expect, test } from 'vitest'
-import { classifyFailure, isPermanentRefreshFailure } from './index.ts'
+import {
+  classifyFailure,
+  isPermanentRefreshFailure,
+  loadModelsDevCatalog,
+  validateModelsDevModelIds,
+} from './index.ts'
 import { rewriteRequestPayload } from './anthropic.ts'
+import { buildOpenAIAuthorizeUrl } from './openai.ts'
 
 function apiError(overrides: { statusCode?: number; responseBody?: string; responseHeaders?: Record<string, string> }) {
   return new APICallError({
@@ -48,6 +54,55 @@ describe('isPermanentRefreshFailure', () => {
     expect(isPermanentRefreshFailure(new Error('invalid_grant'))).toBe(true)
     expect(isPermanentRefreshFailure(new Error('refresh token expired'))).toBe(true)
     expect(isPermanentRefreshFailure(new Error('network down'))).toBe(false)
+  })
+})
+
+describe('OpenAI browser auth', () => {
+  test('builds the Codex PKCE authorization URL', () => {
+    const url = new URL(
+      buildOpenAIAuthorizeUrl({
+        redirectUri: 'http://localhost:1455/auth/callback',
+        challenge: 'pkce-challenge',
+        state: 'oauth-state',
+      }),
+    )
+    expect(Object.fromEntries(url.searchParams)).toMatchInlineSnapshot(`
+      {
+        "client_id": "app_EMoamEEZ73f0CkXaXp7hrann",
+        "code_challenge": "pkce-challenge",
+        "code_challenge_method": "S256",
+        "codex_cli_simplified_flow": "true",
+        "id_token_add_organizations": "true",
+        "originator": "opencode",
+        "redirect_uri": "http://localhost:1455/auth/callback",
+        "response_type": "code",
+        "scope": "openid profile email offline_access",
+        "state": "oauth-state",
+      }
+    `)
+  })
+})
+
+describe.skipIf(!process.env.TEST_MODELS_DEV)('models.dev validation', () => {
+  test('accepts current models and rejects unknown model IDs', async () => {
+    const catalog = await loadModelsDevCatalog()
+    expect(catalog).not.toBeInstanceOf(Error)
+    if (catalog instanceof Error) return
+
+    expect(
+      validateModelsDevModelIds({
+        entries: [
+          'anthropic/claude-opus-4-6',
+          'openai/gpt-5.5',
+          'xai/grok-4.6',
+          'opencode/grok-4.6',
+        ],
+        catalog,
+      }),
+    ).toBeNull()
+    expect(
+      validateModelsDevModelIds({ entries: ['openai/not-a-real-model'], catalog }),
+    ).toMatchInlineSnapshot(`[InvalidModelError: Model not-a-real-model does not exist for provider openai in models.dev]`)
   })
 })
 

@@ -27,7 +27,7 @@ pnpm workspace, flat `./*` packages. **One root README only, no per-package READ
   - `src/store.ts` — accounts, presets, cooldown state under `~/.subrouter` (override: `SUBROUTER_HOME`). JSON files, 0600, lock-dir locking.
   - `src/adapters/` — one adapter per provider (login flow, token refresh, fetch wrapper, `createModel`). Shared failure classification in `adapters/index.ts`.
   - `src/router.ts` — `RouterModel` (AI SDK `LanguageModelV3`) + `createSubrouter` provider factory. Resolves a preset to ranked candidates, skips cooldowns, fails over on rotate-worthy errors.
-  - `src/cli.ts` — goke CLI (`login`, `logout`, `account`, `preset`, `status`, `cooldown clear`, `install opencode`).
+  - `src/cli.ts` — goke CLI (`login`, `logout`, `account`, `preset`, `status`, `cooldown clear`).
 - `opencode/` — npm package `@subrouter/opencode`. Plugin `config` hook injects a `subrouter` provider whose `npm` field is a `file://` URL to the bundled `provider.js`; every preset becomes a model (`subrouter/<preset>`). Only plugin initializers may be exported from `src/index.ts` (opencode calls every export as a plugin).
 - `website/` — Holocron docs site deployed to subrouter.org.
 
@@ -96,9 +96,20 @@ Rate-limit state lives in `~/.subrouter/state.json`, shared by every process and
 
 ## Harness plugins
 
-- **opencode** (`@subrouter/opencode`): done. Registered via `subrouter install opencode`.
+- **opencode** (`@subrouter/opencode`): done. Users register it in the `plugin` array in `~/.config/opencode/opencode.json`. It exports two plugins: `subrouterPlugin` (config hook, registers the provider) and `subrouterAuthPlugin` (auth hook, drives login).
 - **pi** (badlogic pi-mono): planned next harness plugin. Same architecture: a thin plugin registers the subrouter provider inside pi; the router and adapters in `cli/` stay harness-agnostic. Keep everything reusable from `cli/` so the pi package is as thin as the opencode one.
-- kimaki will eventually replace its own anthropic/openai/xai auth plugins and multioauth commands with these packages.
+- **kimaki**: registers `@subrouter/opencode` next to its own legacy rotation plugins and lists `subrouter` first in Discord `/login`. Its legacy anthropic/openai/xai plugins are marked LEGACY but not deleted, because opencode ships no Claude Pro/Max auth of its own and plain `anthropic/*` model ids would break.
+
+## Login is split into begin/complete
+
+Adapters expose `beginLogin()` returning a `LoginSession`, not a blocking `login()`. Harnesses that cannot sit on a TTY (opencode's auth hook, and through it a Discord bot) need to show `url` + `instructions` immediately and finish later. `runLogin()` in `adapters/index.ts` is the blocking wrapper the CLI uses; never reintroduce a blocking `login` on the adapter interface.
+
+Two contracts to protect:
+
+- **`instructions` is parsed, not just displayed.** Device flows must embed the code as `code: XXXX-XXXX` (uppercase alphanumeric plus dashes). Harnesses regex it out to render the code on its own line. `cli/src/adapters/login.test.ts` asserts this with the same regex kimaki uses.
+- **`complete()` is memoized.** Harnesses retry the callback. A second call must return the in-flight promise, not start a second device poll or a second token exchange.
+
+`cancel()` releases anything the session holds, which for anthropic is a listening callback server on port 53692. Call it on any abandoned flow.
 
 ## AI SDK version pinning
 

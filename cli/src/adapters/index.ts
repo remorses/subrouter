@@ -8,7 +8,9 @@
 
 import type { LanguageModelV3 } from '@ai-sdk/provider'
 import { APICallError } from '@ai-sdk/provider'
-import type { ProviderId, StoredAccount } from '../store.ts'
+import * as errore from 'errore'
+import { z } from 'zod'
+import { isProviderId, type ProviderId, type StoredAccount } from '../store.ts'
 import { anthropicAdapter } from './anthropic.ts'
 import { openaiAdapter } from './openai.ts'
 import { opencodeAdapter } from './opencode.ts'
@@ -25,6 +27,42 @@ export type LoginArgs = {
   promptManualInput?: () => Promise<string | null>
 }
 
+export type BeginLoginArgs = {
+  /**
+   * The authorizing browser is not on this machine, so a localhost callback
+   * cannot be caught and the user must paste the redirect URL back. Harnesses
+   * that drive login remotely (a chat bot, a web UI) set this.
+   */
+  manualInput?: boolean
+  /** Provider-specific login method, such as `browser` or `device`. */
+  method?: string
+}
+
+/**
+ * A login started but not finished. Split in two halves so harnesses that
+ * cannot block on a TTY (opencode's auth hook, and through it kimaki's Discord
+ * `/login`) can show `url` + `instructions` first and call `complete` later.
+ */
+export type LoginSession = {
+  /** URL the user must open to authorize */
+  url: string
+  /**
+   * Human readable instructions. Device flows MUST embed the code as
+   * `code: XXXX-XXXX` (uppercase alphanumeric + dashes) because harnesses
+   * regex it out to render the code on its own. See openai/xai adapters.
+   */
+  instructions: string
+  /** `auto` finishes on its own (device poll / localhost callback), `code` needs a pasted value */
+  method: 'auto' | 'code'
+  /** Safe to call more than once; adapters memoize the in-flight result. */
+  complete(input?: string): Promise<Error | StoredAccount>
+  /**
+   * Abandon the login and release anything it holds (anthropic keeps a
+   * localhost callback server listening). Safe to call after `complete`.
+   */
+  cancel?(): void
+}
+
 export type ProviderAdapter = {
   id: ProviderId
   name: string
@@ -37,7 +75,38 @@ export type ProviderAdapter = {
     account: StoredAccount
     persist: PersistTokens
   }): LanguageModelV3
-  login(args: LoginArgs): Promise<Error | StoredAccount>
+  beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession>
+}
+
+export class LoginInputError extends errore.createTaggedError({
+  name: 'LoginInputError',
+  message: 'Login for $provider needs a pasted value but no input was available',
+}) {}
+
+/** Blocking one-shot login for TTY callers. The CLI uses this; opencode drives beginLogin directly. */
+export async function runLogin({
+  adapter,
+  beginLoginArgs,
+  log,
+  openUrl,
+  promptManualInput,
+}: LoginArgs & { adapter: ProviderAdapter; beginLoginArgs?: BeginLoginArgs }): Promise<Error | StoredAccount> {
+  const session = await adapter.beginLogin({
+    ...beginLoginArgs,
+    manualInput: beginLoginArgs?.manualInput ?? Boolean(process.env.SUBROUTER_MANUAL_OAUTH),
+  })
+  if (session instanceof Error) return session
+
+  log(session.instructions)
+  log(session.url)
+  await openUrl(session.url)
+
+  if (session.method === 'auto') return session.complete()
+
+  if (!promptManualInput) return new LoginInputError({ provider: adapter.id })
+  const input = await promptManualInput()
+  if (!input?.trim()) return new LoginInputError({ provider: adapter.id })
+  return session.complete(input.trim())
 }
 
 export const adapters: Record<ProviderId, ProviderAdapter> = {
@@ -45,6 +114,66 @@ export const adapters: Record<ProviderId, ProviderAdapter> = {
   openai: openaiAdapter,
   xai: xaiAdapter,
   opencode: opencodeAdapter,
+}
+
+export class ModelsDevError extends errore.createTaggedError({
+  name: 'ModelsDevError',
+  message: 'Could not load model IDs from models.dev: $reason',
+}) {}
+
+export class InvalidModelError extends errore.createTaggedError({
+  name: 'InvalidModelError',
+  message: 'Model $model does not exist for provider $provider in models.dev',
+}) {}
+
+const modelsDevProviderSchema = z
+  .object({ models: z.record(z.string(), z.object({ id: z.string() })) })
+  .transform(({ models }) => new Set(Object.keys(models)))
+
+const modelsDevCatalogSchema = z.object({
+  anthropic: modelsDevProviderSchema,
+  openai: modelsDevProviderSchema,
+  xai: modelsDevProviderSchema,
+  opencode: modelsDevProviderSchema,
+})
+
+export type ModelsDevCatalog = z.infer<typeof modelsDevCatalogSchema>
+
+export async function loadModelsDevCatalog() {
+  const response = await fetch('https://models.dev/api.json', {
+    signal: AbortSignal.timeout(10_000),
+  }).catch((cause) => new ModelsDevError({ reason: 'request failed', cause }))
+  if (response instanceof Error) return response
+  if (!response.ok) return new ModelsDevError({ reason: `HTTP ${response.status}` })
+
+  const payload = await response.json().catch(
+    (cause) => new ModelsDevError({ reason: 'invalid JSON response', cause }),
+  )
+  if (payload instanceof Error) return payload
+
+  const catalog = modelsDevCatalogSchema.safeParse(payload)
+  if (!catalog.success) {
+    return new ModelsDevError({ reason: 'invalid response shape', cause: catalog.error })
+  }
+  return catalog.data
+}
+
+export function validateModelsDevModelIds({
+  entries,
+  catalog,
+}: {
+  entries: string[]
+  catalog: ModelsDevCatalog
+}) {
+  for (const entry of entries) {
+    const slash = entry.indexOf('/')
+    const provider = entry.slice(0, slash)
+    const model = entry.slice(slash + 1)
+    if (!isProviderId(provider)) return new InvalidModelError({ provider, model })
+
+    if (!catalog[provider].has(model)) return new InvalidModelError({ provider, model })
+  }
+  return null
 }
 
 export function resolveBaseUrl({

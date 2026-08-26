@@ -9,27 +9,30 @@
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import * as errore from 'errore'
 import type { StoredAccount } from '../store.ts'
-import { resolveBaseUrl, type LoginArgs, type ProviderAdapter } from './index.ts'
+import { resolveBaseUrl, type LoginSession, type ProviderAdapter } from './index.ts'
 
 export class OpencodeAuthError extends errore.createTaggedError({
   name: 'OpencodeAuthError',
   message: 'OpenCode Zen auth failed: $reason',
 }) {}
 
-async function login(args: LoginArgs): Promise<Error | StoredAccount> {
-  args.log('Get an API key from https://console.opencode.ai (opencode Go subscription), then paste it here.')
-  await args.openUrl('https://console.opencode.ai')
-  if (!args.promptManualInput) {
-    return new OpencodeAuthError({ reason: 'opencode login requires pasting an API key interactively' })
-  }
-  const key = await args.promptManualInput()
-  if (!key?.trim()) return new OpencodeAuthError({ reason: 'no API key provided' })
-  const now = Date.now()
+async function beginLogin(): Promise<Error | LoginSession> {
   return {
-    type: 'api',
-    key: key.trim(),
-    addedAt: now,
-    lastUsed: now,
+    url: 'https://console.opencode.ai',
+    instructions:
+      'Copy your API key from console.opencode.ai (opencode Go subscription), then paste it back here.',
+    method: 'code',
+    async complete(input) {
+      const key = input?.trim()
+      if (!key) return new OpencodeAuthError({ reason: 'no API key provided' })
+      const now = Date.now()
+      return {
+        type: 'api',
+        key,
+        addedAt: now,
+        lastUsed: now,
+      } satisfies StoredAccount
+    },
   }
 }
 
@@ -50,5 +53,5 @@ export const opencodeAdapter: ProviderAdapter = {
     })
     return provider.languageModel(modelId)
   },
-  login,
+  beginLogin,
 }

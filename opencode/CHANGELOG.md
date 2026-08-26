@@ -6,8 +6,10 @@
 
 1. **Use every subrouter preset as an OpenCode model:** the plugin registers the `subrouter` provider and exposes the built-in `subrouter/default` model plus each user preset as `subrouter/<preset>`.
 
-   ```bash
-   npx @subrouter/cli install opencode
+   ```json
+   {
+     "plugin": ["@subrouter/opencode"]
+   }
    ```
 
    Restart OpenCode, then select `subrouter/default` or another configured preset.

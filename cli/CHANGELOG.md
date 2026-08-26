@@ -32,10 +32,4 @@
    npx @subrouter/cli cooldown clear
    ```
 
-5. **Install the OpenCode integration:** register `@subrouter/opencode` without editing the OpenCode configuration by hand:
-
-   ```bash
-   npx @subrouter/cli install opencode
-   ```
-
-6. **Use subrouter as an AI SDK provider:** import `createSubrouter`, `RouterModel`, account storage helpers, and provider adapters from `@subrouter/cli` when building another personal harness integration.
+5. **Use subrouter as an AI SDK provider:** import `createSubrouter`, `RouterModel`, account storage helpers, and provider adapters from `@subrouter/cli` when building another personal harness integration.

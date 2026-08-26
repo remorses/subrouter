@@ -10,7 +10,12 @@
 import { createXai } from '@ai-sdk/xai'
 import * as errore from 'errore'
 import type { StoredAccount } from '../store.ts'
-import { resolveBaseUrl, type LoginArgs, type PersistTokens, type ProviderAdapter } from './index.ts'
+import {
+  resolveBaseUrl,
+  type LoginSession,
+  type PersistTokens,
+  type ProviderAdapter,
+} from './index.ts'
 
 export class XaiAuthError extends errore.createTaggedError({
   name: 'XaiAuthError',
@@ -159,28 +164,37 @@ async function pollDeviceCodeToken(device: DeviceCodeResponse): Promise<XaiAuthE
   return new XaiAuthError({ reason: 'device authorization timed out' })
 }
 
-async function login(args: LoginArgs): Promise<Error | StoredAccount> {
+async function beginLogin(): Promise<Error | LoginSession> {
   const device = await requestDeviceCode()
   if (device instanceof Error) return device
 
-  const browserUrl = device.verification_uri_complete ?? device.verification_uri
-  args.log(`Open ${device.verification_uri} on any device and enter code: ${device.user_code}`)
-  await args.openUrl(browserUrl)
+  let pending: Promise<Error | StoredAccount> | undefined
 
-  const tokens = await pollDeviceCodeToken(device)
-  if (tokens instanceof Error) return tokens
-
-  const identity = extractXaiIdentity(tokens.access_token)
-  const now = Date.now()
   return {
-    type: 'oauth',
-    refresh: tokens.refresh_token,
-    access: tokens.access_token,
-    expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-    email: identity.email,
-    accountId: identity.accountId,
-    addedAt: now,
-    lastUsed: now,
+    url: device.verification_uri_complete ?? device.verification_uri,
+    // The `code: X` shape is load bearing; harnesses regex it to show the code.
+    instructions: `Open ${device.verification_uri} on any device and enter code: ${device.user_code}`,
+    method: 'auto',
+    complete() {
+      pending ??= (async (): Promise<Error | StoredAccount> => {
+        const tokens = await pollDeviceCodeToken(device)
+        if (tokens instanceof Error) return tokens
+
+        const identity = extractXaiIdentity(tokens.access_token)
+        const now = Date.now()
+        return {
+          type: 'oauth',
+          refresh: tokens.refresh_token,
+          access: tokens.access_token,
+          expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+          email: identity.email,
+          accountId: identity.accountId,
+          addedAt: now,
+          lastUsed: now,
+        }
+      })()
+      return pending
+    },
   }
 }
 
@@ -285,5 +299,5 @@ export const xaiAdapter: ProviderAdapter = {
     if (withResponses.responses) return withResponses.responses(modelId)
     return provider.languageModel(modelId)
   },
-  login,
+  beginLogin,
 }
