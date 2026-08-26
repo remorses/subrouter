@@ -17,15 +17,13 @@ Every time one runs out of credits you stop working and start fixing subscriptio
 ## Quick Start
 
 ```bash
-npm i -g @subrouter/cli
-
 # add your subscriptions
-subrouter login anthropic
-subrouter login openai
-subrouter login xai
+npx @subrouter/cli login anthropic
+npx @subrouter/cli login openai
+npx @subrouter/cli login xai
 
 # register the opencode plugin
-subrouter install opencode
+npx @subrouter/cli install opencode
 
 # in opencode, pick the model: subrouter/default
 ```
@@ -96,19 +94,25 @@ Anthropic OAuth only works if the requests look like **Claude Code CLI** request
 ## CLI
 
 ```bash
-subrouter login [provider]                  # add a subscription to the pool
-subrouter logout <provider>                 # remove all accounts for a provider
-subrouter account list [--json]             # accounts + cooldown status
-subrouter account remove <provider> <n|email>
+npx @subrouter/cli login [provider]         # add a subscription to the pool
+npx @subrouter/cli logout <provider>        # remove all accounts for a provider
+npx @subrouter/cli account list [--json]    # accounts + cooldown status
+npx @subrouter/cli account remove <provider> <n|email>
 
-subrouter preset create <name> --models 'anthropic/claude-opus-4-6,xai/grok-4.6'
-subrouter preset list
-subrouter preset show <name>                # includes currently usable candidates
-subrouter preset remove <name>
+npx @subrouter/cli preset create <name> --models 'anthropic/claude-opus-4-6,xai/grok-4.6'
+npx @subrouter/cli preset list
+npx @subrouter/cli preset show <name>       # includes currently usable candidates
+npx @subrouter/cli preset remove <name>
 
-subrouter status                            # everything at a glance
-subrouter cooldown clear                    # retry every account now
-subrouter install opencode                  # register the opencode plugin
+npx @subrouter/cli status                   # everything at a glance
+npx @subrouter/cli cooldown clear           # retry every account now
+npx @subrouter/cli install opencode         # register the opencode plugin
+```
+
+Prefer a short command? Install it globally and every example becomes `subrouter <command>`:
+
+```bash
+npm i -g @subrouter/cli
 ```
 
 The `default` preset is built in: the newest model of each provider you are logged in to, ranked anthropic, openai, xai, opencode. Create a preset named `default` to override it.
@@ -118,7 +122,7 @@ The `default` preset is built in: the newest model of each provider you are logg
 `@subrouter/opencode` registers a `subrouter` provider inside opencode via the plugin `config` hook. Each preset becomes a model. Install it with:
 
 ```bash
-subrouter install opencode
+npx @subrouter/cli install opencode
 ```
 
 or manually in `~/.config/opencode/opencode.json`:
@@ -133,9 +137,10 @@ Then pick `subrouter/default` (or any `subrouter/<preset>`) as the model. Preset
 
 ## Shell Completions
 
-Enable Tab completion for your shell:
+Completions hook into the `subrouter` command, so this one needs a **global install** rather than `npx`:
 
 ```bash
+npm i -g @subrouter/cli
 subrouter completions install
 ```
 
