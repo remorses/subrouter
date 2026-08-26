@@ -53,5 +53,9 @@ export const opencodeAdapter: ProviderAdapter = {
     })
     return provider.languageModel(modelId)
   },
+  async getApiKey({ account }) {
+    if (account.key) return account.key
+    return new OpencodeAuthError({ reason: 'account has no API key' })
+  },
   beginLogin,
 }

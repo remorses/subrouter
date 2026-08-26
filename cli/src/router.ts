@@ -12,7 +12,7 @@
 
 import type { LanguageModelV3, LanguageModelV3CallOptions } from '@ai-sdk/provider'
 import * as errore from 'errore'
-import { adapters, classifyFailure } from './adapters/index.ts'
+import { adapters, classifyFailure, failureDetailsFromError } from './adapters/index.ts'
 import {
   isCoolingDown,
   loadAccounts,
@@ -182,7 +182,7 @@ export class RouterModel implements LanguageModelV3 {
       if (result.ok) return result.value
 
       const error = result.error
-      const action = classifyFailure(error)
+      const action = classifyFailure(failureDetailsFromError(error))
       if (!action) throw error
 
       await markCooldown({

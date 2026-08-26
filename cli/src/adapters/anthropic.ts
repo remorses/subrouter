@@ -627,5 +627,6 @@ export const anthropicAdapter: ProviderAdapter = {
     })
     return provider.languageModel(modelId)
   },
+  getApiKey: freshAccessToken,
   beginLogin,
 }

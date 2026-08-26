@@ -75,6 +75,8 @@ export type ProviderAdapter = {
     account: StoredAccount
     persist: PersistTokens
   }): LanguageModelV3
+  /** Resolve the current API key or OAuth access token for native harness providers. */
+  getApiKey(args: { account: StoredAccount; persist: PersistTokens }): Promise<Error | string>
   beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession>
 }
 
@@ -197,6 +199,13 @@ export type FailureAction = {
   cooldownMs: number
 }
 
+export type FailureDetails = {
+  statusCode?: number
+  headers?: Record<string, string>
+  message: string
+  body?: string
+}
+
 const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000
 const EXHAUSTED_COOLDOWN_MS = 6 * 60 * 60 * 1000
 
@@ -211,6 +220,8 @@ function rotateWorthyText(text: string) {
     haystack.includes('balance exhausted') ||
     haystack.includes('spending-limit') ||
     haystack.includes('run out of credits') ||
+    haystack.includes('refresh token expired') ||
+    haystack.includes('re-login required') ||
     haystack.includes('invalid api key') ||
     haystack.includes('authentication_error') ||
     haystack.includes('permission_error')
@@ -232,22 +243,26 @@ function retryAfterMs(headers: Record<string, string> | undefined) {
  * 402 means the subscription balance is exhausted (xAI Grok Build), which
  * gets a long cooldown. 429/401/403 and usage-limit texts get a short one.
  */
-export function classifyFailure(error: unknown): FailureAction | null {
-  if (!APICallError.isInstance(error)) {
-    const message = error instanceof Error ? error.message : ''
-    if (rotateWorthyText(message)) return { rotate: true, cooldownMs: DEFAULT_COOLDOWN_MS }
-    return null
+export function failureDetailsFromError(error: Error): FailureDetails {
+  if (APICallError.isInstance(error)) {
+    return {
+      statusCode: error.statusCode,
+      headers: error.responseHeaders,
+      message: error.message,
+      body: error.responseBody,
+    }
   }
+  return { message: error instanceof Error ? error.message : String(error) }
+}
 
-  const status = error.statusCode
-  const body = error.responseBody ?? ''
+export function classifyFailure({ statusCode: status, headers, message, body = '' }: FailureDetails): FailureAction | null {
   if (status === 402) return { rotate: true, cooldownMs: EXHAUSTED_COOLDOWN_MS }
   if (status === 429) {
-    const fromHeader = retryAfterMs(error.responseHeaders)
+    const fromHeader = retryAfterMs(headers)
     return { rotate: true, cooldownMs: Math.max(fromHeader ?? 0, DEFAULT_COOLDOWN_MS) }
   }
   if (status === 401 || status === 403) return { rotate: true, cooldownMs: DEFAULT_COOLDOWN_MS }
-  if (rotateWorthyText(`${error.message} ${body}`)) {
+  if (rotateWorthyText(`${message} ${body}`)) {
     return { rotate: true, cooldownMs: DEFAULT_COOLDOWN_MS }
   }
   return null

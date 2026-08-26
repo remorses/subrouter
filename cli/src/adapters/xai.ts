@@ -299,5 +299,6 @@ export const xaiAdapter: ProviderAdapter = {
     if (withResponses.responses) return withResponses.responses(modelId)
     return provider.languageModel(modelId)
   },
+  getApiKey: freshAccessToken,
   beginLogin,
 }

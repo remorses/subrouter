@@ -489,6 +489,11 @@ export const openaiAdapter: ProviderAdapter = {
     })
     return provider.responses(modelId)
   },
+  async getApiKey(args) {
+    const auth = await freshAccessToken(args)
+    if (auth instanceof Error) return auth
+    return auth.access
+  },
   async beginLogin(args) {
     if (!args?.method || args.method === 'browser') return beginBrowserLogin(args)
     if (args.method === 'device') return beginDeviceLogin()

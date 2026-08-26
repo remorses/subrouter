@@ -4,7 +4,9 @@ export * from './router.ts'
 export {
   adapters,
   classifyFailure,
+  failureDetailsFromError,
   isPermanentRefreshFailure,
+  type FailureDetails,
   type ProviderAdapter,
   type LoginArgs,
   type PersistTokens,
