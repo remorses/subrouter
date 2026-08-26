@@ -181,7 +181,8 @@ export function accountKey(account: StoredAccount) {
 }
 
 export function accountLabel(account: StoredAccount, index?: number) {
-  const identity = account.email || account.accountId || accountKey(account)
+  const identity =
+    account.email || account.accountId || (account.type === 'api' ? 'API key' : accountKey(account))
   return index !== undefined ? `#${index + 1} (${identity})` : identity
 }
 

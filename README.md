@@ -161,19 +161,28 @@ Anthropic OAuth only works if requests look like **Claude Code CLI** requests. T
 ## CLI
 
 ```bash
-npx @subrouter/cli login [provider]         # add a subscription to the pool
-npx @subrouter/cli logout <provider>        # remove all accounts for a provider
+npx @subrouter/cli login [provider] [--input value] # add a subscription to the pool
+npx @subrouter/cli logout <provider> [--force]      # remove all accounts for a provider
 npx @subrouter/cli account list [--json]    # accounts + cooldown status
-npx @subrouter/cli account remove <provider> <n|email>
+npx @subrouter/cli account status [provider] # exits 1 until login completes
+npx @subrouter/cli account remove <provider> <n|email> [--force]
 
-npx @subrouter/cli preset create <name> --models 'anthropic/claude-opus-4-6,xai/grok-4.6'
+npx @subrouter/cli preset create <name> --models 'anthropic/claude-opus-4-6,xai/grok-4.6' [--force]
 npx @subrouter/cli preset list
 npx @subrouter/cli preset show <name>       # includes currently usable candidates
-npx @subrouter/cli preset remove <name>
+npx @subrouter/cli preset remove <name> [--force]
 
 npx @subrouter/cli status                   # everything at a glance
-npx @subrouter/cli cooldown clear           # retry every account now
+npx @subrouter/cli cooldown clear [--force] # retry every account now
 ```
+
+**Browser and device login runs in the background** when an agent or non-interactive shell starts it. Approve the URL, then poll for completion:
+
+```bash
+npx @subrouter/cli account status anthropic
+```
+
+API-key providers accept `--input` in non-interactive shells. Destructive commands ask for confirmation in a terminal and require `--force` elsewhere.
 
 Prefer a short command? Install it globally and every example becomes `subrouter <command>`:
 

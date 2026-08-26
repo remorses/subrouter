@@ -4,7 +4,7 @@
   "type": "module",
   "description": "Router that rotates across personal AI subscriptions when one reaches its usage limit.",
   "bin": {
-    "subrouter": "dist/cli.js"
+    "subrouter": "dist/bin.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -52,7 +52,7 @@
     }
   },
   "scripts": {
-    "build": "tsc && chmod +x dist/cli.js",
+    "build": "tsc && chmod +x dist/bin.js",
     "typecheck": "tsc",
     "test": "vitest run",
     "prepublishOnly": "rimraf dist \"*.tsbuildinfo\" && pnpm build"
