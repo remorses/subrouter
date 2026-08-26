@@ -2,12 +2,19 @@
     <br/>
     <br/>
     <h3>subrouter</h3>
-    <p>Like OpenRouter, but for your personal AI subscriptions.</p>
+    <h4>Like OpenRouter, but for your personal AI subscriptions</h4>
+    <p>When one subscription hits its limit, the next one takes over.</p>
     <br/>
     <br/>
 </div>
 
-Most people now pay for several AI subscriptions: Claude Pro/Max, ChatGPT Plus/Pro, SuperGrok, opencode Go. Every time one runs out of credits you stop working and start fixing subscriptions: switch models, re-login your harness, repeat. **Subrouter cycles through your subscriptions automatically** when one hits a rate limit or runs out of credits, across accounts of the same provider and across different providers.
+Most people now pay for several AI subscriptions: **Claude Pro/Max**, **ChatGPT Plus/Pro**, **SuperGrok**, **opencode Go**.
+
+Every time one runs out of credits you stop working and start fixing subscriptions: switch models, re-login your harness, repeat.
+
+**Subrouter cycles through your subscriptions automatically** when one hits a rate limit or runs out of credits. It rotates across accounts of the same provider, and across different providers.
+
+## Quick Start
 
 ```bash
 # add your subscriptions
@@ -21,47 +28,68 @@ subrouter install opencode
 # in opencode, pick the model: subrouter/default
 ```
 
-When Claude hits its usage limit mid-session, the next request transparently goes to your ChatGPT subscription. When that one is exhausted too, it goes to Grok. You only see an error when **every** subscription is out.
+When Claude hits its usage limit mid-session, the next request transparently goes to your ChatGPT subscription. When that one is exhausted too, it goes to Grok.
+
+You only see an error when **every** subscription is out.
 
 > [!IMPORTANT]
 > Subrouter is for **personal use only**. Routing subscription traffic to serve other people or tenants is against the terms of use of most (if not all) subscription providers.
 
 ## How it works
 
-```
-opencode (model: subrouter/default)
-│
-└─> ┌──────────────────────┐  preset default
-    │ subrouter provider   │  1. anthropic/claude-opus-4-6
-    │ (@subrouter/opencode)│  2. openai/gpt-5.5
-    └─────────┬────────────┘  3. xai/grok-4.6
-              │               4. opencode/grok-4.6
-              │
-    for each candidate ──> skip if in cooldown
-              │
-              ├─> ok ──> stream response
-              │
-              └─> 429 / 402 / usage limit
-                       │
-                       ├─> account available ──> rotate, retry
-                       │
-                       └─> exhausted ──> cooldown ──> next provider
+A preset is an ordered list of `provider/model` candidates. Subrouter walks that list, skips anything in cooldown, and retries on the next account or the next provider.
+
+```diagram
+   opencode
+   model: subrouter/default
+        │
+        v
+   ┌──────────────────────────┐        preset "default"
+   │ subrouter provider       │ ────>  1. anthropic/claude-opus-4-6
+   │ (@subrouter/opencode)    │        2. openai/gpt-5.5
+   └────────────┬─────────────┘        3. xai/grok-4.6
+                │                      4. opencode/grok-4.6
+                v
+   for each candidate in order
+                │
+                ├────> in cooldown? ────> skip it, take the next candidate
+                │
+                ├────> ok ────> stream the response
+                │
+                └────> 429 / 402 / usage limit
+                              │
+                              ├────> another account left? ────> rotate, retry
+                              │
+                              └────> none left ────> cooldown, next candidate
 ```
 
-- **Accounts** live in `~/.subrouter/accounts.json`. Log in multiple times to the same provider to build a rotation pool.
-- **Cooldowns** are global per machine (`~/.subrouter/state.json`): once an account is rate limited, every session and harness skips it until the cooldown expires. 429 respects `retry-after` (minimum 5 minutes), 402 (balance exhausted) cools down for 6 hours.
-- **Presets** are ordered lists of `provider/model` entries. Every preset is a model in opencode: `subrouter/<preset-name>`.
+### Accounts
+
+Accounts live in `~/.subrouter/accounts.json`. Log in **multiple times to the same provider** to build a rotation pool.
+
+### Cooldowns
+
+Cooldowns are **global per machine** (`~/.subrouter/state.json`). Once an account is rate limited, every session and every harness skips it until the cooldown expires.
+
+| Response                | Cooldown                                |
+| ----------------------- | --------------------------------------- |
+| `429` rate limited      | `retry-after` header, minimum 5 minutes |
+| `402` balance exhausted | 6 hours                                 |
+
+### Presets
+
+Presets are ordered lists of `provider/model` entries. Every preset shows up as a model in opencode: `subrouter/<preset-name>`.
 
 ## Supported subscriptions
 
-| Provider | Subscription | Login flow |
-|----------|--------------|------------|
-| `anthropic` | Claude Pro / Max | OAuth (browser, PKCE) |
-| `openai` | ChatGPT Plus / Pro (Codex backend) | Device code |
-| `xai` | SuperGrok / Grok Build | Device code |
-| `opencode` | opencode Go (OpenCode Zen) | API key from console.opencode.ai |
+| Provider    | Subscription                       | Login flow                       |
+| ----------- | ---------------------------------- | -------------------------------- |
+| `anthropic` | Claude Pro / Max                   | OAuth (browser, PKCE)            |
+| `openai`    | ChatGPT Plus / Pro (Codex backend) | Device code                      |
+| `xai`       | SuperGrok / Grok Build             | Device code                      |
+| `opencode`  | opencode Go (OpenCode Zen)         | API key from console.opencode.ai |
 
-Anthropic OAuth requires the requests to look like Claude Code CLI requests; subrouter handles the required request rewriting (system prompt identity, tool names, beta headers) automatically.
+Anthropic OAuth only works if the requests look like **Claude Code CLI** requests. Subrouter rewrites them for you: system prompt identity, tool names, and beta headers.
 
 ## CLI
 
@@ -136,14 +164,16 @@ pnpm build
 pnpm test
 ```
 
-Tests never hit real APIs. Unit tests fake provider endpoints with local HTTP servers; the e2e test boots a real `opencode serve`, points the adapters at fake endpoints via `SUBROUTER_*_BASE_URL` env vars, and asserts a rate-limited provider is cycled to the fallback through the entire opencode pipeline.
+**Tests never hit real APIs.** Unit tests fake provider endpoints with local HTTP servers.
+
+The e2e test boots a real `opencode serve`, points the adapters at fake endpoints via `SUBROUTER_*_BASE_URL`, and asserts a rate-limited provider is cycled to the fallback through the entire opencode pipeline.
 
 ## Environment variables
 
-| Variable | Purpose |
-|----------|---------|
-| `SUBROUTER_HOME` | State directory (default `~/.subrouter`) |
+| Variable                       | Purpose                                     |
+| ------------------------------ | ------------------------------------------- |
+| `SUBROUTER_HOME`               | State directory (default `~/.subrouter`)    |
 | `SUBROUTER_ANTHROPIC_BASE_URL` | Override the Anthropic API base URL (tests) |
-| `SUBROUTER_OPENAI_BASE_URL` | Override the Codex API base URL (tests) |
-| `SUBROUTER_XAI_BASE_URL` | Override the xAI API base URL (tests) |
-| `SUBROUTER_OPENCODE_BASE_URL` | Override the OpenCode Zen base URL (tests) |
+| `SUBROUTER_OPENAI_BASE_URL`    | Override the Codex API base URL (tests)     |
+| `SUBROUTER_XAI_BASE_URL`       | Override the xAI API base URL (tests)       |
+| `SUBROUTER_OPENCODE_BASE_URL`  | Override the OpenCode Zen base URL (tests)  |
