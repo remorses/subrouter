@@ -1,6 +1,6 @@
 {
   "name": "@subrouter/opencode",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "type": "module",
   "description": "OpenCode plugin that registers the subrouter provider: cycle through your personal AI subscriptions when one hits rate limits.",
   "main": "./dist/index.js",

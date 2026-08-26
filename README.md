@@ -8,6 +8,8 @@
     <br/>
 </div>
 
+**Like OpenRouter, but for your personal AI subscriptions.**
+
 Most people now pay for several AI subscriptions: **Claude Pro/Max**, **ChatGPT Plus/Pro**, **SuperGrok**, **opencode Go**.
 
 Every time one runs out of credits you stop working and start fixing subscriptions: switch models, re-login your harness, repeat.
@@ -162,7 +164,7 @@ subrouter completions uninstall
 
 pnpm workspace with two packages:
 
-- `cli/` — the `subrouter` package: account stores, presets, cooldown state, provider adapters and the routing engine (`RouterModel`, an AI SDK `LanguageModelV3`)
+- `cli/` — `@subrouter/cli`: account stores, presets, cooldown state, provider adapters and the routing engine (`RouterModel`, an AI SDK `LanguageModelV3`)
 - `opencode/` — `@subrouter/opencode`: the opencode plugin plus the provider entry opencode loads
 
 ```bash
