@@ -4,6 +4,8 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+packageExtensionsChecksum: sha256-zSexcgEQseJZS4+MbbMZMMeIYFVQPYt4OUmcjEtXTHA=
+
 importers:
 
   .:
@@ -3817,6 +3819,7 @@ packages:
       hono: ^4.0.0
       react: '*'
       react-dom: '*'
+      vite: 8.2.2
       zod: ^4.0.0
     peerDependenciesMeta:
       '@modelcontextprotocol/sdk':
@@ -8168,6 +8171,7 @@ snapshots:
       eventsource-parser: 3.1.1
       its-fine: 2.0.0(@types/react@19.2.18)(react@19.2.8)
       nf3: 0.3.16
+      vite: 8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
       zod: 4.4.3
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.30.0(zod@4.4.3)
@@ -8177,7 +8181,6 @@ snapshots:
     transitivePeerDependencies:
       - '@types/react'
       - react-server-dom-webpack
-      - vite
 
   srvx@0.12.7: {}
 
