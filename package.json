@@ -1,0 +1,23 @@
+{
+  "name": "subrouter-monorepo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "typecheck": "pnpm -r run build",
+    "test": "pnpm -r run test"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.2",
+    "tsx": "^4.20.5",
+    "vitest": "^3.2.4",
+    "opencode-ai": "^1.18.23"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "opencode-ai",
+      "esbuild",
+      "msgpackr-extract"
+    ]
+  }
+}

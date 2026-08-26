@@ -1,0 +1,61 @@
+{
+  "name": "@subrouter/opencode",
+  "version": "0.0.0",
+  "type": "module",
+  "description": "OpenCode plugin that registers the subrouter provider: cycle through your personal AI subscriptions when one hits rate limits.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/remorses/subrouter.git",
+    "directory": "opencode"
+  },
+  "homepage": "https://github.com/remorses/subrouter",
+  "bugs": "https://github.com/remorses/subrouter/issues",
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "ai",
+    "router",
+    "subscriptions"
+  ],
+  "files": [
+    "src",
+    "dist"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./provider": {
+      "types": "./dist/provider.d.ts",
+      "default": "./dist/provider.js"
+    },
+    "./src": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./src/*": {
+      "types": "./src/*.ts",
+      "default": "./src/*.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "prepublishOnly": "rimraf dist \"*.tsbuildinfo\" && pnpm build"
+  },
+  "dependencies": {
+    "errore": "^0.14.1",
+    "subrouter": "workspace:^"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.23",
+    "@opencode-ai/sdk": "^1.18.23",
+    "@types/node": "^24.0.0",
+    "rimraf": "^6.0.1"
+  }
+}
