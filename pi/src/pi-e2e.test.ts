@@ -15,6 +15,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { addAccount, loadState, savePreset } from '@subrouter/cli'
+import { WebSocketServer, type WebSocket } from 'ws'
 
 type LocalServer = {
   server: Server
@@ -23,6 +24,20 @@ type LocalServer = {
 }
 
 type Responder = (request: LocalServer['requests'][number], response: http.ServerResponse) => void
+
+type CodexWebSocketRequest = {
+  authorization?: string
+  path: string
+}
+
+type CodexWebSocketServer = {
+  connections: string[]
+  httpRequests: string[]
+  requests: CodexWebSocketRequest[]
+  server: Server
+  url: string
+  webSocketServer: WebSocketServer
+}
 
 const envNames = [
   'PI_OFFLINE',
@@ -38,6 +53,21 @@ function openCodeTestModel(): Model<Api> {
   const model = provider?.getModels().find((entry) => entry.api === 'openai-completions')
   if (!model) throw new Error('Pi has no OpenCode Chat Completions model for the integration test')
   return model
+}
+
+function openAITestModel(): Model<Api> {
+  const provider = builtinProviders().find((entry) => entry.id === 'openai-codex')
+  const model = provider?.getModels().find((entry) => entry.api === 'openai-codex-responses')
+  if (!model) throw new Error('Pi has no OpenAI Codex Responses model for the integration test')
+  return model
+}
+
+function openAIToken(accountId: string) {
+  const payload = Buffer.from(
+    JSON.stringify({ 'https://api.openai.com/auth': { chatgpt_account_id: accountId } }),
+    'utf8',
+  ).toString('base64')
+  return `aaa.${payload}.bbb`
 }
 
 async function listen(
@@ -65,6 +95,102 @@ async function listen(
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('Local server has no address')
   return { server, requests, url: `http://127.0.0.1:${address.port}` } satisfies LocalServer
+}
+
+async function listenCodexWebSocket(
+  respond: (request: CodexWebSocketRequest, socket: WebSocket) => void,
+): Promise<CodexWebSocketServer> {
+  const connections: string[] = []
+  const httpRequests: string[] = []
+  const requests: CodexWebSocketRequest[] = []
+  const server = http.createServer((request, response) => {
+    httpRequests.push(request.url ?? '')
+    response.writeHead(500, { 'content-type': 'application/json' })
+    response.end(JSON.stringify({ error: { message: 'Unexpected HTTP fallback' } }))
+  })
+  const webSocketServer = new WebSocketServer({ server })
+  webSocketServer.on('connection', (socket, request) => {
+    const authorization = request.headers.authorization
+    connections.push(authorization ?? '')
+    socket.on('message', () => {
+      const received = {
+        authorization,
+        path: request.url ?? '',
+      }
+      requests.push(received)
+      respond(received, socket)
+    })
+  })
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('Local WebSocket server has no address')
+  return {
+    connections,
+    httpRequests,
+    requests,
+    server,
+    url: `http://127.0.0.1:${address.port}`,
+    webSocketServer,
+  }
+}
+
+function streamCodexText({ socket, text, responseId }: { socket: WebSocket; text: string; responseId: string }) {
+  const events = [
+    {
+      type: 'response.output_item.added',
+      item: { type: 'message', id: `msg-${responseId}`, role: 'assistant', status: 'in_progress', content: [] },
+    },
+    { type: 'response.content_part.added', part: { type: 'output_text', text: '' } },
+    { type: 'response.output_text.delta', delta: text },
+  ]
+  for (const event of events) socket.send(JSON.stringify(event))
+}
+
+function streamCodexCompletion({ socket, text, responseId }: { socket: WebSocket; text: string; responseId: string }) {
+  streamCodexText({ socket, text, responseId })
+  const events = [
+    {
+      type: 'response.output_item.done',
+      item: {
+        type: 'message',
+        id: `msg-${responseId}`,
+        role: 'assistant',
+        status: 'completed',
+        content: [{ type: 'output_text', text }],
+      },
+    },
+    {
+      type: 'response.completed',
+      response: {
+        id: responseId,
+        status: 'completed',
+        usage: {
+          input_tokens: 5,
+          output_tokens: 3,
+          total_tokens: 8,
+          input_tokens_details: { cached_tokens: 0 },
+        },
+      },
+    },
+  ]
+  for (const event of events) socket.send(JSON.stringify(event))
+}
+
+async function addOpenAIAccount({ accountId, order }: { accountId: string; order: number }) {
+  await addAccount({
+    provider: 'openai',
+    account: {
+      type: 'oauth',
+      refresh: `refresh-${accountId}`,
+      access: openAIToken(accountId),
+      expires: Date.now() + 60 * 60 * 1000,
+      accountId,
+      addedAt: order,
+      lastUsed: order,
+    },
+  })
 }
 
 function streamChatCompletion({
@@ -137,6 +263,12 @@ async function closeServer(server: Server) {
   })
 }
 
+async function closeCodexWebSocket(server: CodexWebSocketServer) {
+  for (const socket of server.webSocketServer.clients) socket.terminate()
+  await new Promise<void>((resolve) => server.webSocketServer.close(() => resolve()))
+  await closeServer(server.server)
+}
+
 describe.sequential('@subrouter/pi', () => {
   let root: string
   let projectDir: string
@@ -146,6 +278,7 @@ describe.sequential('@subrouter/pi', () => {
   let openCodeServer: LocalServer
   let anthropicRespond: Responder
   let openCodeRespond: Responder
+  let codexWebSocketServer: CodexWebSocketServer | undefined
   let savedEnv: Record<string, string | undefined>
   let sessionToDispose: { dispose(): void } | undefined
 
@@ -185,7 +318,12 @@ describe.sequential('@subrouter/pi', () => {
   afterEach(async () => {
     sessionToDispose?.dispose()
     sessionToDispose = undefined
-    await Promise.all([closeServer(anthropicServer.server), closeServer(openCodeServer.server)])
+    await Promise.all([
+      closeServer(anthropicServer.server),
+      closeServer(openCodeServer.server),
+      codexWebSocketServer ? closeCodexWebSocket(codexWebSocketServer) : Promise.resolve(),
+    ])
+    codexWebSocketServer = undefined
     for (const name of envNames) {
       const value = savedEnv[name]
       if (value === undefined) delete process.env[name]
@@ -312,6 +450,110 @@ describe.sequential('@subrouter/pi', () => {
       'Bearer account-b',
     ])
     expect(Object.keys((await loadState()).cooldowns)).toHaveLength(1)
+  }, 30_000)
+
+  test('uses a cached Codex websocket and rotates a limited account before output', async () => {
+    const model = openAITestModel()
+    let successfulResponses = 0
+    codexWebSocketServer = await listenCodexWebSocket((request, socket) => {
+      if (request.authorization === `Bearer ${openAIToken('account-a')}`) {
+        socket.send(
+          JSON.stringify({
+            type: 'error',
+            status: 429,
+            error: { type: 'usage_limit_reached', message: 'The usage limit has been reached' },
+            headers: { 'retry-after': '600' },
+          }),
+        )
+        return
+      }
+      successfulResponses++
+      streamCodexCompletion({
+        socket,
+        text: `account B ${successfulResponses}`,
+        responseId: `resp-${successfulResponses}`,
+      })
+    })
+    process.env.SUBROUTER_OPENAI_BASE_URL = codexWebSocketServer.url
+    await addOpenAIAccount({ accountId: 'account-b', order: 1 })
+    await addOpenAIAccount({ accountId: 'account-a', order: 2 })
+    await savePreset({ name: 'openai-websocket', models: [`openai/${model.id}`] })
+
+    const session = await createPiSession('openai-websocket')
+    await session.prompt('first')
+    await session.prompt('second')
+
+    const assistants = session.messages.filter((message) => message.role === 'assistant')
+    expect(
+      assistants.map((message) => message.content.map((item) => (item.type === 'text' ? item.text : item.type))),
+    ).toEqual([['account B 1'], ['account B 2']])
+    expect(codexWebSocketServer.connections).toEqual([
+      `Bearer ${openAIToken('account-a')}`,
+      `Bearer ${openAIToken('account-b')}`,
+    ])
+    expect(codexWebSocketServer.requests.map((request) => request.path)).toEqual([
+      '/codex/responses',
+      '/codex/responses',
+      '/codex/responses',
+    ])
+    expect(codexWebSocketServer.httpRequests).toEqual([])
+    expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:account-a'])
+  }, 30_000)
+
+  test('does not rotate a normal Codex websocket request error', async () => {
+    const model = openAITestModel()
+    codexWebSocketServer = await listenCodexWebSocket((_request, socket) => {
+      socket.send(
+        JSON.stringify({
+          type: 'error',
+          status: 400,
+          error: { type: 'invalid_request_error', message: 'bad request' },
+        }),
+      )
+    })
+    process.env.SUBROUTER_OPENAI_BASE_URL = codexWebSocketServer.url
+    await addOpenAIAccount({ accountId: 'fallback-account', order: 1 })
+    await addOpenAIAccount({ accountId: 'first-account', order: 2 })
+    await savePreset({ name: 'openai-websocket-bad-request', models: [`openai/${model.id}`] })
+
+    const session = await createPiSession('openai-websocket-bad-request')
+    await session.prompt('fail')
+
+    expect(codexWebSocketServer.connections).toEqual([`Bearer ${openAIToken('first-account')}`])
+    expect(codexWebSocketServer.httpRequests).toEqual([])
+    expect(Object.keys((await loadState()).cooldowns)).toEqual([])
+    expect(session.messages.findLast((message) => message.role === 'assistant')).toMatchObject({
+      stopReason: 'error',
+      errorMessage: 'Codex error: bad request',
+    })
+  }, 30_000)
+
+  test('does not rotate a Codex websocket after output starts', async () => {
+    const model = openAITestModel()
+    codexWebSocketServer = await listenCodexWebSocket((_request, socket) => {
+      streamCodexText({ socket, text: 'partial answer', responseId: 'resp-partial' })
+      socket.send(
+        JSON.stringify({
+          type: 'error',
+          status: 429,
+          error: { type: 'usage_limit_reached', message: 'The usage limit has been reached' },
+        }),
+      )
+    })
+    process.env.SUBROUTER_OPENAI_BASE_URL = codexWebSocketServer.url
+    await addOpenAIAccount({ accountId: 'fallback-account', order: 1 })
+    await addOpenAIAccount({ accountId: 'first-account', order: 2 })
+    await savePreset({ name: 'openai-websocket-partial', models: [`openai/${model.id}`] })
+
+    const session = await createPiSession('openai-websocket-partial')
+    await session.prompt('partial')
+
+    expect(codexWebSocketServer.connections).toEqual([`Bearer ${openAIToken('first-account')}`])
+    expect(codexWebSocketServer.httpRequests).toEqual([])
+    expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:first-account'])
+    const assistant = session.messages.findLast((message) => message.role === 'assistant')
+    expect(assistant?.content).toContainEqual(expect.objectContaining({ type: 'text', text: 'partial answer' }))
+    expect(assistant).toMatchObject({ stopReason: 'error' })
   }, 30_000)
 
   test('does not rotate on a normal request error', async () => {

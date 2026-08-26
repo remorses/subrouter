@@ -305,7 +305,7 @@ function streamPreset({
           ? { ...options?.headers, authorization: `Bearer ${apiKey}` }
           : options?.headers,
         maxRetries: 0,
-        transport: candidate.provider === 'openai' ? 'sse' : options?.transport,
+        transport: options?.transport,
         onResponse: async (received, responseModel) => {
           response = received
           await options?.onResponse?.(received, responseModel)

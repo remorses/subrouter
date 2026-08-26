@@ -14,6 +14,13 @@
     "opencode-ai": "^1.18.23"
   },
   "pnpm": {
+    "packageExtensions": {
+      "spiceflow@1.26.0-rsc.18": {
+        "peerDependencies": {
+          "vite": "8.2.2"
+        }
+      }
+    },
     "onlyBuiltDependencies": [
       "opencode-ai",
       "esbuild",
