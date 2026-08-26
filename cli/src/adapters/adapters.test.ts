@@ -41,6 +41,9 @@ describe('classifyFailure', () => {
   test('plain errors with rate limit text rotate', () => {
     expect(classifyFailure({ message: 'Rate limit reached for account' })?.rotate).toBe(true)
     expect(classifyFailure({ message: 'refresh token expired, re-login required' })?.rotate).toBe(true)
+    const quota = classifyFailure({ message: 'Your 1-week quota has been exhausted' })
+    expect(quota?.rotate).toBe(true)
+    expect(quota!.cooldownMs).toBeGreaterThanOrEqual(6 * 60 * 60 * 1000)
     expect(classifyFailure({ message: 'something else' })).toBeNull()
   })
 })
@@ -171,6 +174,10 @@ describe.skipIf(!process.env.TEST_MODELS_DEV)('models.dev validation', () => {
           'openai/gpt-5.5',
           'xai/grok-4.6',
           'opencode/grok-4.6',
+          'minimax/MiniMax-M3',
+          'kimi/k3',
+          'zai/glm-5.3',
+          'alibaba/qwen3.7-plus',
         ],
         catalog,
       }),

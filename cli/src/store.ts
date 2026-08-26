@@ -13,7 +13,18 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-export const PROVIDER_IDS = ['anthropic', 'openai', 'xai', 'opencode', 'github-copilot', 'poe'] as const
+export const PROVIDER_IDS = [
+  'anthropic',
+  'openai',
+  'xai',
+  'opencode',
+  'github-copilot',
+  'poe',
+  'minimax',
+  'kimi',
+  'zai',
+  'alibaba',
+] as const
 export type ProviderId = (typeof PROVIDER_IDS)[number]
 
 export function isProviderId(value: string): value is ProviderId {

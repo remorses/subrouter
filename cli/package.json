@@ -2,7 +2,7 @@
   "name": "@subrouter/cli",
   "version": "0.1.0",
   "type": "module",
-  "description": "Router for personal Anthropic, OpenAI, xAI, OpenCode, GitHub Copilot and Poe subscriptions.",
+  "description": "Router that rotates across personal AI subscriptions when one reaches its usage limit.",
   "bin": {
     "subrouter": "dist/cli.js"
   },
@@ -25,6 +25,10 @@
     "opencode",
     "github-copilot",
     "poe",
+    "minimax",
+    "kimi",
+    "zai",
+    "qwen",
     "rate-limit",
     "failover"
   ],

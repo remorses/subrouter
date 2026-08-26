@@ -100,7 +100,7 @@ cli
 
       Providers: \`anthropic\` (Claude Pro/Max), \`openai\` (ChatGPT via Codex),
       \`xai\` (SuperGrok), \`opencode\` (opencode Go), \`github-copilot\`,
-      and \`poe\`.
+      \`poe\`, \`minimax\`, \`kimi\`, \`zai\`, and \`alibaba\`.
       Run it again with the same provider to add more accounts.
     `,
   )
@@ -113,6 +113,8 @@ cli
   .example('subrouter login xai')
   .example('subrouter login github-copilot')
   .example('subrouter login poe')
+  .example('subrouter login minimax')
+  .example('subrouter login kimi')
   .action(async (provider, options) => {
     const id = await pickProvider(provider)
     if (options.method && id !== 'openai') fail('`--method` is only supported for OpenAI login')

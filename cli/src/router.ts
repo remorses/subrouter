@@ -48,6 +48,10 @@ export const DEFAULT_PROVIDER_ORDER: ProviderId[] = [
   'opencode',
   'github-copilot',
   'poe',
+  'minimax',
+  'kimi',
+  'zai',
+  'alibaba',
 ]
 export const DEFAULT_PRESET_NAME = 'default'
 

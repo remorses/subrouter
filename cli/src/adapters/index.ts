@@ -12,6 +12,7 @@ import * as errore from 'errore'
 import { z } from 'zod'
 import { isProviderId, type ProviderId, type StoredAccount } from '../store.ts'
 import { anthropicAdapter } from './anthropic.ts'
+import { alibabaAdapter, kimiAdapter, minimaxAdapter, zaiAdapter } from './coding-plans.ts'
 import { githubCopilotAdapter } from './github-copilot.ts'
 import { openaiAdapter } from './openai.ts'
 import { opencodeAdapter } from './opencode.ts'
@@ -120,6 +121,10 @@ export const adapters: Record<ProviderId, ProviderAdapter> = {
   opencode: opencodeAdapter,
   'github-copilot': githubCopilotAdapter,
   poe: poeAdapter,
+  minimax: minimaxAdapter,
+  kimi: kimiAdapter,
+  zai: zaiAdapter,
+  alibaba: alibabaAdapter,
 }
 
 export class ModelsDevError extends errore.createTaggedError({
@@ -136,14 +141,31 @@ const modelsDevProviderSchema = z
   .object({ models: z.record(z.string(), z.object({ id: z.string() })) })
   .transform(({ models }) => new Set(Object.keys(models)))
 
-const modelsDevCatalogSchema = z.object({
-  anthropic: modelsDevProviderSchema,
-  openai: modelsDevProviderSchema,
-  xai: modelsDevProviderSchema,
-  opencode: modelsDevProviderSchema,
-  'github-copilot': modelsDevProviderSchema,
-  poe: modelsDevProviderSchema,
-})
+const modelsDevCatalogSchema = z
+  .object({
+    anthropic: modelsDevProviderSchema,
+    openai: modelsDevProviderSchema,
+    xai: modelsDevProviderSchema,
+    opencode: modelsDevProviderSchema,
+    'github-copilot': modelsDevProviderSchema,
+    poe: modelsDevProviderSchema,
+    'minimax-coding-plan': modelsDevProviderSchema,
+    'kimi-for-coding': modelsDevProviderSchema,
+    'zai-coding-plan': modelsDevProviderSchema,
+    'alibaba-coding-plan': modelsDevProviderSchema,
+  })
+  .transform((catalog) => ({
+    anthropic: catalog.anthropic,
+    openai: catalog.openai,
+    xai: catalog.xai,
+    opencode: catalog.opencode,
+    'github-copilot': catalog['github-copilot'],
+    poe: catalog.poe,
+    minimax: catalog['minimax-coding-plan'],
+    kimi: catalog['kimi-for-coding'],
+    zai: catalog['zai-coding-plan'],
+    alibaba: catalog['alibaba-coding-plan'],
+  }))
 
 export type ModelsDevCatalog = z.infer<typeof modelsDevCatalogSchema>
 
@@ -234,6 +256,16 @@ function rotateWorthyText(text: string) {
   )
 }
 
+function quotaExhaustedText(text: string) {
+  const haystack = text.toLowerCase()
+  return (
+    haystack.includes('quota has been exhausted') ||
+    haystack.includes('quota exhausted') ||
+    haystack.includes('quota exceeded') ||
+    haystack.includes('insufficient_quota')
+  )
+}
+
 function retryAfterMs(headers: Record<string, string> | undefined) {
   const raw = headers?.['retry-after']
   if (!raw) return undefined
@@ -262,6 +294,9 @@ export function failureDetailsFromError(error: Error): FailureDetails {
 }
 
 export function classifyFailure({ statusCode: status, headers, message, body = '' }: FailureDetails): FailureAction | null {
+  if (quotaExhaustedText(`${message} ${body}`)) {
+    return { rotate: true, cooldownMs: EXHAUSTED_COOLDOWN_MS }
+  }
   if (status === 402) return { rotate: true, cooldownMs: EXHAUSTED_COOLDOWN_MS }
   if (status === 429) {
     const fromHeader = retryAfterMs(headers)

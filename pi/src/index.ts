@@ -42,17 +42,32 @@ const PI_PROVIDER_IDS: Record<ProviderId, string> = {
   opencode: 'opencode',
   'github-copilot': 'github-copilot',
   poe: 'poe',
+  minimax: 'minimax',
+  kimi: 'kimi-coding',
+  zai: 'zai',
+  alibaba: 'alibaba',
 }
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
 
-function createPoeProvider(modelIds: string[]) {
-  const baseUrl = process.env.SUBROUTER_POE_BASE_URL?.replace(/\/+$/, '') || 'https://api.poe.com/v1'
-  const models: Model<'openai-completions'>[] = modelIds.map((id) => ({
-    id,
-    name: id,
+function createOpenAICompatibleProvider({
+  id,
+  name,
+  baseUrl,
+  envVar,
+  modelIds,
+}: {
+  id: string
+  name: string
+  baseUrl: string
+  envVar: string
+  modelIds: string[]
+}) {
+  const models: Model<'openai-completions'>[] = modelIds.map((modelId) => ({
+    id: modelId,
+    name: modelId,
     api: 'openai-completions',
-    provider: 'poe',
+    provider: id,
     baseUrl,
     reasoning: false,
     input: ['text'],
@@ -61,10 +76,63 @@ function createPoeProvider(modelIds: string[]) {
     maxTokens: 16_384,
   }))
   return createProvider({
-    id: 'poe',
-    name: 'Poe',
+    id,
+    name,
     baseUrl,
-    auth: { apiKey: envApiKeyAuth('Poe API key', ['POE_API_KEY']) },
+    auth: { apiKey: envApiKeyAuth(`${name} API key`, [envVar]) },
+    models,
+    api: openAICompletionsApi(),
+  })
+}
+
+function openAIModels(provider: Provider | undefined) {
+  return (provider?.getModels() ?? []).filter(
+    (model): model is Model<'openai-completions'> => model.api === 'openai-completions',
+  )
+}
+
+function createAlibabaProvider({
+  source,
+  baseUrl,
+  modelIds,
+}: {
+  source: Provider | undefined
+  baseUrl: string
+  modelIds: string[]
+}) {
+  const templates = openAIModels(source)
+  const fallback = templates.find((model) => model.id === 'qwen3.7-plus')
+  const models = modelIds.flatMap((modelId) => {
+    const template = templates.find((model) => model.id === modelId) ?? fallback
+    if (!template) return []
+    return [{ ...template, id: modelId, name: modelId, provider: 'alibaba', baseUrl }]
+  })
+  return createProvider({
+    id: 'alibaba',
+    name: 'Alibaba Coding Plan',
+    baseUrl,
+    auth: { apiKey: envApiKeyAuth('Alibaba Coding Plan API key', ['ALIBABA_CODING_PLAN_API_KEY']) },
+    models,
+    api: openAICompletionsApi(),
+  })
+}
+
+function createZaiProvider(source: Provider | undefined) {
+  const models = openAIModels(source)
+  const glm53 = models.find((model) => model.id === 'glm-5.3')
+  if (glm53 && !models.some((model) => model.id === 'glm-5.3-highspeed')) {
+    models.push({
+      ...glm53,
+      id: 'glm-5.3-highspeed',
+      name: 'GLM-5.3 Highspeed',
+      cost: ZERO_COST,
+    })
+  }
+  return createProvider({
+    id: 'zai',
+    name: 'Z.AI',
+    baseUrl: 'https://api.z.ai/api/coding/paas/v4',
+    auth: { apiKey: envApiKeyAuth('Z.AI API key', ['ZAI_API_KEY']) },
     models,
     api: openAICompletionsApi(),
   })
@@ -229,9 +297,13 @@ function streamPreset({
       }
 
       let response: ProviderResponse | undefined
+      const usesBearerHeader = candidate.provider === 'minimax' || candidate.provider === 'kimi'
       const inner = target.provider.streamSimple(target.model, context, {
         ...options,
-        apiKey,
+        apiKey: usesBearerHeader ? undefined : apiKey,
+        headers: usesBearerHeader
+          ? { ...options?.headers, authorization: `Bearer ${apiKey}` }
+          : options?.headers,
         maxRetries: 0,
         transport: candidate.provider === 'openai' ? 'sse' : options?.transport,
         onResponse: async (received, responseModel) => {
@@ -297,17 +369,37 @@ async function createSubrouterProvider() {
   const resolved = await Promise.all(
     [...names].map(async (preset) => ({ preset, entries: await resolvePresetModels(preset) })),
   )
-  const poeModelIds = new Set(adapters.poe.defaultModels)
+  const customModelIds = {
+    poe: new Set(adapters.poe.defaultModels),
+    alibaba: new Set(adapters.alibaba.defaultModels),
+  }
   for (const item of resolved) {
     if (item.entries instanceof Error) continue
     for (const entry of item.entries) {
       const parsed = parsePresetEntry(entry)
-      if (parsed?.provider === 'poe') poeModelIds.add(parsed.modelId)
+      if (parsed?.provider === 'poe' || parsed?.provider === 'alibaba') {
+        customModelIds[parsed.provider].add(parsed.modelId)
+      }
     }
   }
   const providers = new Map(builtinProviders().map((provider) => [provider.id, provider]))
-  const poe = createPoeProvider([...poeModelIds])
+  providers.set('zai', createZaiProvider(providers.get('zai')))
+  const poe = createOpenAICompatibleProvider({
+    id: 'poe',
+    name: 'Poe',
+    baseUrl: process.env.SUBROUTER_POE_BASE_URL?.replace(/\/+$/, '') || 'https://api.poe.com/v1',
+    envVar: 'POE_API_KEY',
+    modelIds: [...customModelIds.poe],
+  })
   providers.set(poe.id, poe)
+  const alibaba = createAlibabaProvider({
+    source: providers.get('qwen-token-plan'),
+    baseUrl:
+      process.env.SUBROUTER_ALIBABA_BASE_URL?.replace(/\/+$/, '') ||
+      'https://coding-intl.dashscope.aliyuncs.com/v1',
+    modelIds: [...customModelIds.alibaba],
+  })
+  providers.set(alibaba.id, alibaba)
   const models = resolved.map(({ preset, entries }) => {
     return presetModel({ preset, entries: entries instanceof Error ? [] : entries, providers })
   })

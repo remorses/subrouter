@@ -8,6 +8,7 @@
 import { createServer, type Server } from 'node:http'
 import { afterEach, describe, expect, test } from 'vitest'
 import { anthropicAdapter } from './anthropic.ts'
+import { alibabaAdapter, kimiAdapter, minimaxAdapter, zaiAdapter } from './coding-plans.ts'
 import { openaiAdapter } from './openai.ts'
 import { opencodeAdapter } from './opencode.ts'
 import { poeAdapter } from './poe.ts'
@@ -145,6 +146,26 @@ describe('Poe login', () => {
     expect(await session.complete()).toMatchInlineSnapshot(
       `[PoeAuthError: Poe auth failed: no authorization code provided]`,
     )
+  })
+})
+
+describe('coding plan login', () => {
+  test.each([
+    ['minimax', minimaxAdapter],
+    ['kimi', kimiAdapter],
+    ['zai', zaiAdapter],
+    ['alibaba', alibabaAdapter],
+  ] as const)('%s stores its subscription key', async (_provider, adapter) => {
+    const session = await adapter.beginLogin()
+    if (session instanceof Error) throw session
+
+    expect(session.method).toBe('code')
+    const [first, second] = await Promise.all([
+      session.complete('  subscription-key  '),
+      session.complete('ignored-key'),
+    ])
+    expect(first).toBe(second)
+    expect(first).toMatchObject({ type: 'api', key: 'subscription-key' })
   })
 })
 
