@@ -224,6 +224,23 @@ function codexEndpoint() {
   return CODEX_API_ENDPOINT
 }
 
+/**
+ * The Codex backend rejects requests unless `store` is false (it returns
+ * `{"detail":"Store must be set to false"}`). opencode enforces this via
+ * providerOptions at the harness level; we enforce it at the fetch layer so
+ * subrouter works in any harness.
+ */
+function patchCodexBody(body: string | undefined) {
+  if (typeof body !== 'string' || body.length === 0) return body
+  const payload = errore.try(() => JSON.parse(body) as Record<string, unknown>)
+  if (payload instanceof Error) return body
+  payload.store = false
+  // Codex rejects max_output_tokens ("Unsupported parameter"); the Codex CLI
+  // never sends it and opencode drops it via chat.params for openai.
+  delete payload.max_output_tokens
+  return JSON.stringify(payload)
+}
+
 function buildFetch({ account, persist }: { account: StoredAccount; persist: PersistTokens }) {
   return async (input: Request | string | URL, init?: RequestInit): Promise<Response> => {
     const auth = await freshAccessToken({ account, persist })
@@ -241,12 +258,22 @@ function buildFetch({ account, persist }: { account: StoredAccount; persist: Per
 
     const parsed =
       input instanceof URL ? input : new URL(typeof input === 'string' ? input : input.url)
-    const url =
+    const isModelCall =
       parsed.pathname.includes('/v1/responses') || parsed.pathname.includes('/chat/completions')
-        ? new URL(codexEndpoint())
-        : parsed
+    const url = isModelCall ? new URL(codexEndpoint()) : parsed
 
-    return fetch(url, { ...init, headers })
+    const originalBody =
+      typeof init?.body === 'string'
+        ? init.body
+        : input instanceof Request
+          ? await input
+              .clone()
+              .text()
+              .catch(() => undefined)
+          : undefined
+    const body = isModelCall ? patchCodexBody(originalBody) : originalBody
+
+    return fetch(url, { ...init, ...(body !== undefined ? { body } : {}), headers })
   }
 }
 
