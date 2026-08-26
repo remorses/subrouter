@@ -1,0 +1,17 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "subrouter-website",
+  "main": "./src/server.tsx",
+  "compatibility_date": "2026-03-15",
+  "compatibility_flags": ["nodejs_compat"],
+  "routes": [
+    {
+      "custom_domain": true,
+      "pattern": "subrouter.org"
+    },
+    {
+      "custom_domain": true,
+      "pattern": "www.subrouter.org"
+    }
+  ],
+}

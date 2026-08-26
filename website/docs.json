@@ -1,0 +1,47 @@
+{
+  "$schema": "https://holocron.so/docs.json",
+  "name": "Subrouter",
+  "description": "Like OpenRouter, but for your personal AI subscriptions. Cycles Anthropic, OpenAI, xAI and opencode accounts when one hits its rate limit.",
+  "favicon": "/favicon.svg",
+  "colors": {
+    "primary": "#6366f1"
+  },
+  "appearance": {
+    "default": "system"
+  },
+  "icons": {
+    "library": "lucide"
+  },
+  "navbar": {
+    "links": [
+      {
+        "type": "github",
+        "href": "https://github.com/remorses/subrouter"
+      }
+    ]
+  },
+  "navigation": {
+    "global": {
+      "anchors": [
+        {
+          "anchor": "GitHub",
+          "href": "https://github.com/remorses/subrouter",
+          "icon": "lucide:github"
+        },
+        {
+          "anchor": "npm",
+          "href": "https://www.npmjs.com/package/subrouter",
+          "icon": "lucide:package"
+        }
+      ]
+    },
+    "groups": [
+      {
+        "group": "Overview",
+        "icon": "lucide:home",
+        "pages": ["index"]
+      }
+    ]
+  },
+  "decorativeLines": "none"
+}
