@@ -41,7 +41,14 @@ export class AllCandidatesExhaustedError extends errore.createTaggedError({
   message: 'All subscriptions exhausted for preset $preset: $attempts',
 }) {}
 
-export const DEFAULT_PROVIDER_ORDER: ProviderId[] = ['anthropic', 'openai', 'xai', 'opencode']
+export const DEFAULT_PROVIDER_ORDER: ProviderId[] = [
+  'anthropic',
+  'openai',
+  'xai',
+  'opencode',
+  'github-copilot',
+  'poe',
+]
 export const DEFAULT_PRESET_NAME = 'default'
 
 /** Builtin default preset: newest model of each provider, ranked. */
@@ -174,7 +181,7 @@ export class RouterModel implements LanguageModelV3 {
         .then(() => run(model))
         .then(
           (value) => ({ ok: true as const, value }),
-          (error: unknown) => ({
+          (error) => ({
             ok: false as const,
             error: error instanceof Error ? error : new Error(String(error)),
           }),

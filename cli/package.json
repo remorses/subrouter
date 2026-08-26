@@ -2,7 +2,7 @@
   "name": "@subrouter/cli",
   "version": "0.1.0",
   "type": "module",
-  "description": "Router for your personal AI subscriptions. Cycle through Anthropic, OpenAI, xAI and opencode subscriptions when one runs out of credits.",
+  "description": "Router for personal Anthropic, OpenAI, xAI, OpenCode, GitHub Copilot and Poe subscriptions.",
   "bin": {
     "subrouter": "dist/cli.js"
   },
@@ -23,6 +23,8 @@
     "openai",
     "xai",
     "opencode",
+    "github-copilot",
+    "poe",
     "rate-limit",
     "failover"
   ],

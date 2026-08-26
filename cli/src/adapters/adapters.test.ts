@@ -6,7 +6,14 @@ import {
   validateModelsDevModelIds,
 } from './index.ts'
 import { rewriteRequestPayload } from './anthropic.ts'
+import {
+  buildGitHubDeviceCodeBody,
+  buildCopilotTokenRequest,
+  patchCopilotBody,
+  shouldUseCopilotResponses,
+} from './github-copilot.ts'
 import { buildOpenAIAuthorizeUrl } from './openai.ts'
+import { buildPoeAuthorizeUrl, parsePoeCallbackInput } from './poe.ts'
 
 describe('classifyFailure', () => {
   test('429 rotates with retry-after honored', () => {
@@ -69,6 +76,85 @@ describe('OpenAI browser auth', () => {
         "state": "oauth-state",
       }
     `)
+  })
+})
+
+describe('GitHub Copilot', () => {
+  test('builds the GitHub device request and selects the Responses API', () => {
+    expect(Object.fromEntries(new URLSearchParams(buildGitHubDeviceCodeBody()))).toMatchInlineSnapshot(`
+      {
+        "client_id": "Iv1.b507a08c87ecfe98",
+        "scope": "read:user",
+      }
+    `)
+    expect(shouldUseCopilotResponses('gpt-5.5')).toBe(true)
+    expect(shouldUseCopilotResponses('gpt-5-mini')).toBe(true)
+    expect(shouldUseCopilotResponses('grok-4.6')).toBe(true)
+    expect(shouldUseCopilotResponses('claude-opus-5')).toBe(false)
+    const tokenRequest = buildCopilotTokenRequest('github-token')
+    expect(tokenRequest.method).toBeUndefined()
+    expect(Object.fromEntries(new Headers(tokenRequest.headers))).toMatchInlineSnapshot(`
+      {
+        "accept": "application/json",
+        "authorization": "Bearer github-token",
+        "copilot-integration-id": "vscode-chat",
+        "editor-plugin-version": "copilot-chat/0.35.0",
+        "editor-version": "vscode/1.107.0",
+        "user-agent": "GitHubCopilotChat/0.35.0",
+      }
+    `)
+  })
+
+  test('removes the tool field rejected by the Copilot Anthropic endpoint', () => {
+    expect(
+      JSON.parse(
+        patchCopilotBody(
+          JSON.stringify({
+            tools: [{ name: 'bash', eager_input_streaming: true }, { name: 'read' }],
+          }),
+        )!,
+      ),
+    ).toMatchInlineSnapshot(`
+      {
+        "tools": [
+          {
+            "name": "bash",
+          },
+          {
+            "name": "read",
+          },
+        ],
+      }
+    `)
+  })
+})
+
+describe('Poe OAuth', () => {
+  test('builds the PKCE authorization URL and parses the callback', () => {
+    const url = new URL(
+      buildPoeAuthorizeUrl({
+        redirectUri: 'http://127.0.0.1:1234/callback',
+        challenge: 'pkce-challenge',
+        state: 'oauth-state',
+      }),
+    )
+    expect(Object.fromEntries(url.searchParams)).toMatchInlineSnapshot(`
+      {
+        "client_id": "client_728290227fc048cc9262091a1ea197ea",
+        "code_challenge": "pkce-challenge",
+        "code_challenge_method": "S256",
+        "redirect_uri": "http://127.0.0.1:1234/callback",
+        "response_type": "code",
+        "scope": "apikey:create",
+        "state": "oauth-state",
+      }
+    `)
+    expect(
+      parsePoeCallbackInput({
+        input: 'http://127.0.0.1:1234/callback?code=poe-code&state=oauth-state',
+        state: 'oauth-state',
+      }),
+    ).toBe('poe-code')
   })
 })
 

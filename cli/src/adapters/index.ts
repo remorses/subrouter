@@ -12,8 +12,10 @@ import * as errore from 'errore'
 import { z } from 'zod'
 import { isProviderId, type ProviderId, type StoredAccount } from '../store.ts'
 import { anthropicAdapter } from './anthropic.ts'
+import { githubCopilotAdapter } from './github-copilot.ts'
 import { openaiAdapter } from './openai.ts'
 import { opencodeAdapter } from './opencode.ts'
+import { poeAdapter } from './poe.ts'
 import { xaiAdapter } from './xai.ts'
 
 export type PersistTokens = (update: Partial<StoredAccount>) => Promise<void>
@@ -116,6 +118,8 @@ export const adapters: Record<ProviderId, ProviderAdapter> = {
   openai: openaiAdapter,
   xai: xaiAdapter,
   opencode: opencodeAdapter,
+  'github-copilot': githubCopilotAdapter,
+  poe: poeAdapter,
 }
 
 export class ModelsDevError extends errore.createTaggedError({
@@ -137,6 +141,8 @@ const modelsDevCatalogSchema = z.object({
   openai: modelsDevProviderSchema,
   xai: modelsDevProviderSchema,
   opencode: modelsDevProviderSchema,
+  'github-copilot': modelsDevProviderSchema,
+  poe: modelsDevProviderSchema,
 })
 
 export type ModelsDevCatalog = z.infer<typeof modelsDevCatalogSchema>
@@ -269,7 +275,7 @@ export function classifyFailure({ statusCode: status, headers, message, body = '
 }
 
 /** Permanent OAuth refresh death (invalid_grant / expired refresh). */
-export function isPermanentRefreshFailure(error: unknown) {
+export function isPermanentRefreshFailure(error: Error | string) {
   const message = error instanceof Error ? error.message : typeof error === 'string' ? error : ''
   const haystack = message.toLowerCase()
   if (!haystack) return false

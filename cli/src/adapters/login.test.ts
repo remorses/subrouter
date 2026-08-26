@@ -10,11 +10,12 @@ import { afterEach, describe, expect, test } from 'vitest'
 import { anthropicAdapter } from './anthropic.ts'
 import { openaiAdapter } from './openai.ts'
 import { opencodeAdapter } from './opencode.ts'
+import { poeAdapter } from './poe.ts'
 
 /** Same regex harnesses use to pull a device code out of `instructions`. */
 const DEVICE_CODE_PATTERN = /code:\s*([A-Z0-9][A-Z0-9-]+)/
 
-function jwt(claims: Record<string, unknown>) {
+function jwt(claims: { email: string; chatgpt_account_id: string }) {
   const part = Buffer.from(JSON.stringify(claims)).toString('base64url')
   return `header.${part}.signature`
 }
@@ -23,7 +24,7 @@ async function startFakeIssuer({ pendingPolls }: { pendingPolls: number }) {
   let polls = 0
   const server = createServer((req, res) => {
     const url = new URL(req.url || '', 'http://localhost')
-    const send = (status: number, body: unknown) => {
+    const send = (status: number, body: Record<string, string | number>) => {
       res.writeHead(status, { 'Content-Type': 'application/json', Connection: 'close' })
       res.end(JSON.stringify(body))
     }
@@ -132,6 +133,18 @@ describe('opencode zen login', () => {
 
     expect(await session.complete()).toBeInstanceOf(Error)
     expect(await session.complete('   ')).toBeInstanceOf(Error)
+  })
+})
+
+describe('Poe login', () => {
+  test('manual login does not wait on a local callback without pasted input', async () => {
+    const session = await poeAdapter.beginLogin({ manualInput: true })
+    if (session instanceof Error) throw session
+
+    expect(session.method).toBe('code')
+    expect(await session.complete()).toMatchInlineSnapshot(
+      `[PoeAuthError: Poe auth failed: no authorization code provided]`,
+    )
   })
 })
 

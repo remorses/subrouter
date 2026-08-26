@@ -16,7 +16,8 @@ subrouter must **never translate between AI wire formats**. This is the main rob
 - Adapters only touch requests where the subscription gateway **requires** it, and any rewrite must be reversed on the way out:
   - anthropic: OAuth traffic must look like Claude Code CLI (identity system block, tool-name renames, beta headers). The response stream maps tool names **back** to the originals, so the harness never sees the spoofing.
   - openai (Codex backend): `store: false` forced, `max_output_tokens` stripped, URL rewritten to `chatgpt.com/backend-api/codex/responses`. These are hard endpoint requirements (verified against the real API), not conveniences. Codex is stream-only.
-  - xai / opencode zen: bearer injection only.
+  - xai / opencode zen / poe: bearer injection only.
+  - github-copilot: bearer injection, API-family routing, and removal of the unsupported Anthropic tool-streaming field.
 - The Pi plugin does not use these AI SDK request adapters. It supplies the selected account token to Pi's matching native provider, which owns the required request shape and returns native Pi events.
 - Never add "smart" body transformations, prompt mutation, output post-processing, or cross-format proxying (no anthropic→openai translation like generic LLM proxies do). If a provider needs a new quirk, implement the **minimal** request patch in that provider's adapter fetch, document why, and keep everything else byte-transparent.
 
@@ -90,7 +91,7 @@ The harness packages depend on `@subrouter/cli` with `workspace:^`.
 
 ## Config is implicit and machine-only
 
-Users never hand-edit config files. All state is created through the CLI (`subrouter login`, `subrouter preset create`). Do not add a user-facing editable config file. The `default` preset is built in: a hardcoded ranking of the newest model per provider (opus, gpt-5.x, grok 4.6, zen), filtered to providers with accounts. A user preset named `default` overrides the builtin. Presets appear in both harnesses as `subrouter/<name>`.
+Users never hand-edit config files. All state is created through the CLI (`subrouter login`, `subrouter preset create`). Do not add a user-facing editable config file. The `default` preset is built in: a hardcoded ranking of the newest model per provider, filtered to providers with accounts. A user preset named `default` overrides the builtin. Presets appear in both harnesses as `subrouter/<name>`.
 
 ## Cooldowns are global machine scope
 
@@ -145,7 +146,7 @@ The site is served from two Cloudflare custom domains, `subrouter.org` and `www.
 
 ## Testing rules
 
-- **No real API calls in tests.** Fake provider endpoints with local HTTP servers; adapters read `SUBROUTER_ANTHROPIC_BASE_URL`, `SUBROUTER_OPENAI_BASE_URL`, `SUBROUTER_XAI_BASE_URL`, `SUBROUTER_OPENCODE_BASE_URL` overrides.
+- **No real API calls in tests.** Fake provider endpoints with local HTTP servers; adapters read `SUBROUTER_ANTHROPIC_BASE_URL`, `SUBROUTER_OPENAI_BASE_URL`, `SUBROUTER_XAI_BASE_URL`, `SUBROUTER_OPENCODE_BASE_URL`, `SUBROUTER_GITHUB_COPILOT_BASE_URL`, `SUBROUTER_POE_BASE_URL` overrides.
 - `cli/src/router.test.ts` covers rotation order, cooldown recording, non-rotate errors passing through, exhaustion errors.
 - `opencode/src/opencode-e2e.test.ts` boots a real `opencode serve` (devDep `opencode-ai`) with fake endpoints and asserts a 429 provider is cycled to the fallback through the whole pipeline. It loads `opencode/dist/provider.js`, so run `pnpm build` before tests.
 - `pi/src/pi-e2e.test.ts` loads `pi/dist/index.js` through Pi's real `ResourceLoader`, uses in-memory Pi stores and local HTTP endpoints, and covers account rotation, cross-provider fallback, non-rotate errors, and partial-stream safety.

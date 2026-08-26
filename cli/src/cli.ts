@@ -99,7 +99,8 @@ cli
       Log in to a subscription and add it to the rotation pool.
 
       Providers: \`anthropic\` (Claude Pro/Max), \`openai\` (ChatGPT via Codex),
-      \`xai\` (SuperGrok), \`opencode\` (opencode Go / OpenCode Zen).
+      \`xai\` (SuperGrok), \`opencode\` (opencode Go), \`github-copilot\`,
+      and \`poe\`.
       Run it again with the same provider to add more accounts.
     `,
   )
@@ -110,6 +111,8 @@ cli
   .example('subrouter login anthropic')
   .example('subrouter login openai --method browser')
   .example('subrouter login xai')
+  .example('subrouter login github-copilot')
+  .example('subrouter login poe')
   .action(async (provider, options) => {
     const id = await pickProvider(provider)
     if (options.method && id !== 'openai') fail('`--method` is only supported for OpenAI login')
@@ -170,21 +173,26 @@ cli
     const state = await loadState()
     if (options.json) {
       const output = Object.fromEntries(
-        Object.entries(accounts.providers).map(([provider, pool]) => [
-          provider,
-          {
-            activeIndex: pool.activeIndex,
-            accounts: pool.accounts.map((account, index) => ({
-              index,
-              label: accountLabel(account),
-              type: account.type,
-              email: account.email,
-              accountId: account.accountId,
-              coolingDownUntil:
-                state.cooldowns[cooldownKey({ provider: provider as ProviderId, account })] ?? null,
-            })),
-          },
-        ]),
+        PROVIDER_IDS.flatMap((provider) => {
+          const pool = accounts.providers[provider]
+          if (!pool) return []
+          return [
+            [
+              provider,
+              {
+                activeIndex: pool.activeIndex,
+                accounts: pool.accounts.map((account, index) => ({
+                  index,
+                  label: accountLabel(account),
+                  type: account.type,
+                  email: account.email,
+                  accountId: account.accountId,
+                  coolingDownUntil: state.cooldowns[cooldownKey({ provider, account })] ?? null,
+                })),
+              },
+            ],
+          ]
+        }),
       )
       console.log(JSON.stringify(output, null, 2))
       return

@@ -13,11 +13,11 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 
-export const PROVIDER_IDS = ['anthropic', 'openai', 'xai', 'opencode'] as const
+export const PROVIDER_IDS = ['anthropic', 'openai', 'xai', 'opencode', 'github-copilot', 'poe'] as const
 export type ProviderId = (typeof PROVIDER_IDS)[number]
 
 export function isProviderId(value: string): value is ProviderId {
-  return (PROVIDER_IDS as readonly string[]).includes(value)
+  return PROVIDER_IDS.some((provider) => provider === value)
 }
 
 export class StoreError extends errore.createTaggedError({
@@ -54,7 +54,7 @@ export async function readJson<T>(filePath: string, fallback: T): Promise<T> {
   return parsed
 }
 
-export async function writeJson(filePath: string, value: unknown) {
+export async function writeJson(filePath: string, value: object) {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
   await fs.writeFile(filePath, JSON.stringify(value, null, 2) + '\n', 'utf8')
   await fs.chmod(filePath, 0o600).catch(() => {})

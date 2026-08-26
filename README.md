@@ -10,7 +10,7 @@
 
 **Like OpenRouter, but for your personal AI subscriptions.**
 
-Most people now pay for several AI subscriptions: **Claude Pro/Max**, **ChatGPT Plus/Pro**, **SuperGrok**, **opencode Go**.
+Most people now pay for several AI subscriptions: **Claude Pro/Max**, **ChatGPT Plus/Pro**, **SuperGrok**, **GitHub Copilot**, **Poe**, **opencode Go**.
 
 Every time one runs out of credits you stop working and start fixing subscriptions: switch models, re-login your harness, repeat.
 
@@ -23,6 +23,8 @@ Every time one runs out of credits you stop working and start fixing subscriptio
 npx @subrouter/cli login anthropic
 npx @subrouter/cli login openai
 npx @subrouter/cli login xai
+npx @subrouter/cli login github-copilot
+npx @subrouter/cli login poe
 ```
 
 Add `@subrouter/opencode` to the `plugin` array in `~/.config/opencode/opencode.json`:
@@ -54,28 +56,28 @@ You only see an error when **every** subscription is out.
 A preset is an ordered list of `provider/model` candidates. Subrouter walks that list, skips anything in cooldown, and retries on the next account or the next provider.
 
 ```diagram
-   opencode Go / Pi
-   model: subrouter/default
-        │
-        v
-   ┌───────────────────────────────┐  preset "default"
-   │ subrouter harness plugin      │ → 1. anthropic/claude-opus-4-6
-   │ @subrouter/opencode           │  2. openai/gpt-5.5
-   │ @subrouter/pi                 │  3. xai/grok-4.6
-   └──────────────┬────────────────┘  4. opencode/grok-4.6
-                  │
-                  v
-   for each candidate in order
-                  │
-                  ├─> in cooldown? ──> skip it, take next candidate
-                  │
-                  ├─> ok ──> stream the response
-                  │
-                  └─> 429 / 402 / usage limit
-                                │
-                                ├─> another account left? ──> rotate, retry
-                                │
-                                └─> none left ──> cooldown, next candidate
+                    opencode Go / Pi
+                    model: subrouter/default
+                           │
+                           v
+                    ┌──────────────────────────────┐  preset "default"
+                    │ subrouter harness plugin     │  1. anthropic/claude-opus-4-6
+                    │ @subrouter/opencode          │  2. openai/gpt-5.5
+                    │ @subrouter/pi                │  3. xai/grok-4.6
+                    └──────────────┬───────────────┘  4. opencode/grok-4.6
+                                   │                 5. github-copilot/gpt-5.5
+                                   v                 6. poe/anthropic/claude-opus-4.8
+                    for each candidate in order
+                                   │
+                                   ├──> in cooldown? ──> skip it, take next candidate
+                                   │
+                                   ├──> ok ──────────> stream the response
+                                   │
+                                   └──> 429 / 402 / usage limit
+                                                  │
+                                                  ├──> another account left? ──> rotate, retry
+                                                  │
+                                                  └──> none left ──> cooldown, next candidate
 ```
 
 ### Accounts
@@ -97,12 +99,14 @@ Presets are ordered lists of `provider/model` entries. Every preset shows up in 
 
 ## Supported subscriptions
 
-| Provider    | Subscription                       | Login flow                          |
-| ----------- | ---------------------------------- | ----------------------------------- |
-| `anthropic` | Claude Pro / Max                   | OAuth (browser, PKCE)               |
-| `openai`    | ChatGPT Plus / Pro (Codex backend) | Browser OAuth (PKCE) or device code |
-| `xai`       | SuperGrok / Grok Build             | Device code                         |
-| `opencode`  | opencode Go                        | API key from console.opencode.ai    |
+| Provider         | Subscription                       | Login flow                          |
+| ---------------- | ---------------------------------- | ----------------------------------- |
+| `anthropic`      | Claude Pro / Max                   | OAuth (browser, PKCE)               |
+| `openai`         | ChatGPT Plus / Pro (Codex backend) | Browser OAuth (PKCE) or device code |
+| `xai`            | SuperGrok / Grok Build             | Device code                         |
+| `opencode`       | opencode Go                        | API key from console.opencode.ai    |
+| `github-copilot` | GitHub Copilot                     | GitHub device code                  |
+| `poe`            | Poe subscription points            | Browser OAuth (PKCE)                |
 
 Anthropic OAuth only works if requests look like **Claude Code CLI** requests. The OpenCode adapter and Pi's native provider apply the required identity, tool names, and beta headers.
 
@@ -129,7 +133,7 @@ Prefer a short command? Install it globally and every example becomes `subrouter
 npm i -g @subrouter/cli
 ```
 
-The `default` preset is built in: the newest model of each provider you are logged in to, ranked anthropic, openai, xai, opencode. Create a preset named `default` to override it.
+The `default` preset is built in: the newest model of each provider you are logged in to, ranked anthropic, openai, xai, opencode, GitHub Copilot, Poe. Create a preset named `default` to override it.
 
 ## opencode Go plugin
 
@@ -145,7 +149,7 @@ Then pick `subrouter/default` (or any `subrouter/<preset>`) as the model. Preset
 
 ## Pi plugin
 
-`@subrouter/pi` registers the same presets as models in Pi. It delegates each request to Pi's native Anthropic, Codex, xAI, or opencode provider stream. Subrouter selects the subscription, but it does not translate requests or responses between provider formats.
+`@subrouter/pi` registers the same presets as models in Pi. It delegates each request to Pi's native provider stream. Poe uses Pi's native OpenAI-compatible provider API. Subrouter selects the subscription, but it does not translate requests or responses between provider formats.
 
 ```bash
 pi install npm:@subrouter/pi
@@ -197,17 +201,23 @@ The e2e tests boot real opencode Go and Pi harness runtimes, point every adapter
 
 ## Environment variables
 
-| Variable                       | Purpose                                                      |
-| ------------------------------ | ------------------------------------------------------------ |
-| `SUBROUTER_HOME`               | State directory (default `~/.subrouter`)                     |
-| `SUBROUTER_MANUAL_OAUTH`       | Browser is on another machine: ask for a pasted redirect URL |
-| `SUBROUTER_ANTHROPIC_BASE_URL` | Override the Anthropic API base URL (tests)                  |
-| `SUBROUTER_OPENAI_BASE_URL`    | Override the Codex API base URL (tests)                      |
-| `SUBROUTER_OPENAI_ISSUER_URL`  | Override the OpenAI auth host (tests)                        |
-| `SUBROUTER_XAI_BASE_URL`       | Override the xAI API base URL (tests)                        |
-| `SUBROUTER_OPENCODE_BASE_URL`  | Override the opencode Go base URL (tests)                    |
+| Variable                                  | Purpose                                                  |
+| ----------------------------------------- | -------------------------------------------------------- |
+| `SUBROUTER_HOME`                          | State directory (default `~/.subrouter`)                 |
+| `SUBROUTER_MANUAL_OAUTH`                  | Ask for pasted redirect URL (browser on another machine) |
+| `SUBROUTER_ANTHROPIC_BASE_URL`            | Override the Anthropic API base URL (tests)              |
+| `SUBROUTER_OPENAI_BASE_URL`               | Override the Codex API base URL (tests)                  |
+| `SUBROUTER_OPENAI_ISSUER_URL`             | Override the OpenAI auth host (tests)                    |
+| `SUBROUTER_XAI_BASE_URL`                  | Override the xAI API base URL (tests)                    |
+| `SUBROUTER_OPENCODE_BASE_URL`             | Override the opencode Go base URL (tests)                |
+| `SUBROUTER_GITHUB_COPILOT_BASE_URL`       | Override the GitHub Copilot API base URL (tests)         |
+| `SUBROUTER_GITHUB_COPILOT_GITHUB_URL`     | Override the GitHub OAuth host (tests)                   |
+| `SUBROUTER_GITHUB_COPILOT_GITHUB_API_URL` | Override the GitHub API host (tests)                     |
+| `SUBROUTER_POE_BASE_URL`                  | Override the Poe API base URL (tests)                    |
+| `SUBROUTER_POE_AUTHORIZE_URL`             | Override the Poe authorization URL (tests)               |
+| `SUBROUTER_POE_TOKEN_URL`                 | Override the Poe token URL (tests)                       |
 
 Set `SUBROUTER_MANUAL_OAUTH=1` when the browser that authorizes is not on the
-machine running subrouter. The localhost callback can never fire there, so the
-anthropic flow switches to asking for the redirect URL instead. Harnesses that
+machine running subrouter. The localhost callback can never fire there, so
+browser login switches to asking for the redirect URL instead. Harnesses that
 drive login remotely (kimaki's Discord `/login`) set this for you.

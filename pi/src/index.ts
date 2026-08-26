@@ -2,6 +2,8 @@
 
 import {
   createAssistantMessageEventStream,
+  createProvider,
+  envApiKeyAuth,
   type Api,
   type AssistantMessage,
   type AssistantMessageEvent,
@@ -12,6 +14,7 @@ import {
   type ProviderResponse,
   type StreamOptions,
 } from '@earendil-works/pi-ai'
+import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
@@ -37,9 +40,35 @@ const PI_PROVIDER_IDS: Record<ProviderId, string> = {
   openai: 'openai-codex',
   xai: 'xai',
   opencode: 'opencode',
+  'github-copilot': 'github-copilot',
+  poe: 'poe',
 }
 
 const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }
+
+function createPoeProvider(modelIds: string[]) {
+  const baseUrl = process.env.SUBROUTER_POE_BASE_URL?.replace(/\/+$/, '') || 'https://api.poe.com/v1'
+  const models: Model<'openai-completions'>[] = modelIds.map((id) => ({
+    id,
+    name: id,
+    api: 'openai-completions',
+    provider: 'poe',
+    baseUrl,
+    reasoning: false,
+    input: ['text'],
+    cost: ZERO_COST,
+    contextWindow: 128_000,
+    maxTokens: 16_384,
+  }))
+  return createProvider({
+    id: 'poe',
+    name: 'Poe',
+    baseUrl,
+    auth: { apiKey: envApiKeyAuth('Poe API key', ['POE_API_KEY']) },
+    models,
+    api: openAICompletionsApi(),
+  })
+}
 
 function errorMessage({ model, error, aborted = false }: { model: Model<Api>; error: Error; aborted?: boolean }) {
   return {
@@ -263,15 +292,25 @@ function streamPreset({
 }
 
 async function createSubrouterProvider() {
-  const providers = new Map(builtinProviders().map((provider) => [provider.id, provider]))
   const presets = await loadPresets()
   const names = new Set([DEFAULT_PRESET_NAME, ...Object.keys(presets.presets)])
-  const models = await Promise.all(
-    [...names].map(async (preset) => {
-      const entries = await resolvePresetModels(preset)
-      return presetModel({ preset, entries: entries instanceof Error ? [] : entries, providers })
-    }),
+  const resolved = await Promise.all(
+    [...names].map(async (preset) => ({ preset, entries: await resolvePresetModels(preset) })),
   )
+  const poeModelIds = new Set(adapters.poe.defaultModels)
+  for (const item of resolved) {
+    if (item.entries instanceof Error) continue
+    for (const entry of item.entries) {
+      const parsed = parsePresetEntry(entry)
+      if (parsed?.provider === 'poe') poeModelIds.add(parsed.modelId)
+    }
+  }
+  const providers = new Map(builtinProviders().map((provider) => [provider.id, provider]))
+  const poe = createPoeProvider([...poeModelIds])
+  providers.set(poe.id, poe)
+  const models = resolved.map(({ preset, entries }) => {
+    return presetModel({ preset, entries: entries instanceof Error ? [] : entries, providers })
+  })
   return {
     id: 'subrouter',
     name: 'Subrouter',
