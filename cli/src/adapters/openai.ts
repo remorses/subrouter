@@ -10,9 +10,10 @@
  */
 
 import { createOpenAI } from '@ai-sdk/openai'
+import { isJSONObject, type JSONValue } from '@ai-sdk/provider'
 import * as errore from 'errore'
 import { createServer } from 'node:http'
-import type { StoredAccount } from '../store.ts'
+import { accountKey, type StoredAccount } from '../store.ts'
 import {
   resolveBaseUrl,
   type BeginLoginArgs,
@@ -20,6 +21,14 @@ import {
   type PersistTokens,
   type ProviderAdapter,
 } from './index.ts'
+import {
+  closeOpenAIWebSockets,
+  fetchOpenAIWithWebSocket,
+  OPENAI_WEBSOCKET_SESSION_HEADER,
+  OPENAI_WEBSOCKET_TITLE_HEADER,
+} from './openai-websocket.ts'
+
+export { closeOpenAIWebSockets, OPENAI_WEBSOCKET_SESSION_HEADER, OPENAI_WEBSOCKET_TITLE_HEADER }
 
 export class OpenAIAuthError extends errore.createTaggedError({
   name: 'OpenAIAuthError',
@@ -59,21 +68,16 @@ function parseJwtClaims(token: string): IdTokenClaims | undefined {
   return claims
 }
 
-function extractAccountIdFromClaims(claims: IdTokenClaims) {
-  return (
-    claims.chatgpt_account_id ||
-    claims['https://api.openai.com/auth']?.chatgpt_account_id ||
-    claims.organizations?.[0]?.id
-  )
-}
-
 export function extractOpenAIIdentity(tokens: TokenResponse): { email?: string; accountId?: string } {
   for (const token of [tokens.id_token, tokens.access_token]) {
     if (!token) continue
     const claims = parseJwtClaims(token)
     if (!claims) continue
     const email = claims.email || claims['https://api.openai.com/profile']?.email
-    const accountId = extractAccountIdFromClaims(claims)
+    const accountId =
+      claims.chatgpt_account_id ||
+      claims['https://api.openai.com/auth']?.chatgpt_account_id ||
+      claims.organizations?.[0]?.id
     if (email || accountId) return { email, accountId }
   }
   return {}
@@ -428,8 +432,8 @@ function codexEndpoint() {
  */
 function patchCodexBody(body: string | undefined) {
   if (typeof body !== 'string' || body.length === 0) return body
-  const payload = errore.try(() => JSON.parse(body) as Record<string, unknown>)
-  if (payload instanceof Error) return body
+  const payload = errore.try((): JSONValue => JSON.parse(body))
+  if (payload instanceof Error || !isJSONObject(payload)) return body
   payload.store = false
   // Codex rejects max_output_tokens ("Unsupported parameter"); the Codex CLI
   // never sends it and opencode drops it via chat.params for openai.
@@ -455,7 +459,7 @@ function buildFetch({ account, persist }: { account: StoredAccount; persist: Per
     const parsed =
       input instanceof URL ? input : new URL(typeof input === 'string' ? input : input.url)
     const isModelCall =
-      parsed.pathname.includes('/v1/responses') || parsed.pathname.includes('/chat/completions')
+      parsed.pathname.endsWith('/responses') || parsed.pathname.includes('/chat/completions')
     const url = isModelCall ? new URL(codexEndpoint()) : parsed
 
     const originalBody =
@@ -469,7 +473,17 @@ function buildFetch({ account, persist }: { account: StoredAccount; persist: Per
           : undefined
     const body = isModelCall ? patchCodexBody(originalBody) : originalBody
 
-    return fetch(url, { ...init, ...(body !== undefined ? { body } : {}), headers })
+    return fetchOpenAIWithWebSocket({
+      accountKey: accountKey(account),
+      accessToken: auth.access,
+      input: url,
+      init: {
+        ...init,
+        method: init?.method ?? (input instanceof Request ? input.method : undefined),
+        body,
+        headers,
+      },
+    })
   }
 }
 
@@ -485,7 +499,7 @@ export const openaiAdapter: ProviderAdapter = {
         envVar: this.baseUrlEnvVar,
         fallback: 'https://api.openai.com/v1',
       }),
-      fetch: buildFetch({ account, persist }) as typeof fetch,
+      fetch: buildFetch({ account, persist }),
     })
     return provider.responses(modelId)
   },

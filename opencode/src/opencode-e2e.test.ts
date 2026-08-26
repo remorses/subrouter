@@ -18,6 +18,11 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import {
+  OPENAI_WEBSOCKET_SESSION_HEADER,
+  OPENAI_WEBSOCKET_TITLE_HEADER,
+} from '@subrouter/cli'
+import { addSubrouterHeaders } from './provider.ts'
 
 type MockServer = {
   url: string
@@ -59,7 +64,7 @@ async function startMockServer(
   }
 }
 
-function sseChunk(data: unknown) {
+function sseChunk(data: object) {
   return `data: ${JSON.stringify(data)}\n\n`
 }
 
@@ -208,6 +213,32 @@ afterAll(async () => {
 })
 
 describe('opencode + subrouter provider', () => {
+  test('adds session affinity headers for subrouter models', async () => {
+    const output = { headers: {} }
+    addSubrouterHeaders(
+      {
+        sessionID: 'session-1',
+        agent: 'build',
+        model: { providerID: 'subrouter' },
+      },
+      output,
+    )
+    expect(output.headers).toEqual({ [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-1' })
+
+    addSubrouterHeaders(
+      {
+        sessionID: 'session-2',
+        agent: 'title',
+        model: { providerID: 'subrouter' },
+      },
+      output,
+    )
+    expect(output.headers).toEqual({
+      [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-2',
+      [OPENAI_WEBSOCKET_TITLE_HEADER]: 'true',
+    })
+  })
+
   test('rate-limited provider is cycled to the fallback through opencode', async () => {
     const client = createOpencodeClient({ baseUrl: server.url })
 
@@ -229,7 +260,7 @@ describe('opencode + subrouter provider', () => {
     const parts = result.data?.parts ?? []
     const texts = parts
       .filter((part) => part.type === 'text')
-      .map((part) => (part as { text: string }).text)
+      .map((part) => part.text)
       .join('\n')
     expect(texts).toContain('hello from fallback')
 

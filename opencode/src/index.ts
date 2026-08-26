@@ -26,6 +26,7 @@ import {
   PROVIDER_IDS,
   type StoredAccount,
 } from '@subrouter/cli'
+import { addSubrouterHeaders } from './provider.ts'
 
 function providerEntryUrl() {
   const isDev = import.meta.url.endsWith('.ts')
@@ -62,6 +63,7 @@ export const subrouterPlugin: Plugin = async () => {
         },
       }
     },
+    'chat.headers': async (input, output) => addSubrouterHeaders(input, output),
   }
 }
 

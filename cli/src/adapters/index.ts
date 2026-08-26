@@ -15,6 +15,11 @@ import { anthropicAdapter } from './anthropic.ts'
 import { alibabaAdapter, kimiAdapter, minimaxAdapter, zaiAdapter } from './coding-plans.ts'
 import { githubCopilotAdapter } from './github-copilot.ts'
 import { openaiAdapter } from './openai.ts'
+export {
+  closeOpenAIWebSockets,
+  OPENAI_WEBSOCKET_SESSION_HEADER,
+  OPENAI_WEBSOCKET_TITLE_HEADER,
+} from './openai.ts'
 import { opencodeAdapter } from './opencode.ts'
 import { poeAdapter } from './poe.ts'
 import { xaiAdapter } from './xai.ts'

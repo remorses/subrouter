@@ -1,6 +1,6 @@
 {
   "name": "@subrouter/cli",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Router that rotates across personal AI subscriptions when one reaches its usage limit.",
   "bin": {
@@ -67,10 +67,12 @@
     "errore": "^0.14.1",
     "goke": "^6.14.1",
     "string-dedent": "^3.0.2",
+    "ws": "^8.21.3",
     "zod": "^4.1.5"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
+    "@types/ws": "8.18.1",
     "rimraf": "^6.0.1"
   }
 }

@@ -155,6 +155,8 @@ The site is served from two Cloudflare custom domains, `subrouter.org` and `www.
 
 **Deploy after changing the README.** The site does not rebuild on its own, so an uncorrected README stays live until someone runs `pnpm deploy:prod`.
 
+**Deploy after every npm publish too.** A package release is not complete until the current docs are live on subrouter.org.
+
 ## Testing rules
 
 - **No real API calls in tests.** Fake provider endpoints with local HTTP servers; every adapter has a matching `SUBROUTER_<PROVIDER>_BASE_URL` override.

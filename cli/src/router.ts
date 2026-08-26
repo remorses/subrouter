@@ -10,9 +10,18 @@
  * It only throws when every candidate is exhausted.
  */
 
-import type { LanguageModelV3, LanguageModelV3CallOptions } from '@ai-sdk/provider'
+import type {
+  LanguageModelV3,
+  LanguageModelV3CallOptions,
+  LanguageModelV3StreamPart,
+  LanguageModelV3StreamResult,
+} from '@ai-sdk/provider'
 import * as errore from 'errore'
 import { adapters, classifyFailure, failureDetailsFromError } from './adapters/index.ts'
+import {
+  OPENAI_WEBSOCKET_SESSION_HEADER,
+  OPENAI_WEBSOCKET_TITLE_HEADER,
+} from './adapters/openai-websocket.ts'
 import {
   isCoolingDown,
   loadAccounts,
@@ -132,6 +141,8 @@ export type RouterEvent =
   | { type: 'trying'; candidate: Candidate }
   | { type: 'failover'; candidate: Candidate; error: Error; cooldownMs: number }
 
+type Attempt<T> = { ok: true; value: T } | { ok: false; error: Error }
+
 export type RouterModelArgs = {
   /** preset name, exposed as the modelId */
   preset: string
@@ -165,7 +176,13 @@ export class RouterModel implements LanguageModelV3 {
     })
   }
 
-  private async withFailover<T>(run: (model: LanguageModelV3) => PromiseLike<T>): Promise<T> {
+  private async withFailover<T>(
+    run: (model: LanguageModelV3, candidate: Candidate) => PromiseLike<T>,
+    inspect: (value: T, candidate: Candidate) => Promise<Attempt<T>> = async (value) => ({
+      ok: true,
+      value,
+    }),
+  ): Promise<T> {
     const presetModels = await resolvePresetModels(this.modelId)
     if (presetModels instanceof Error) throw presetModels
 
@@ -182,7 +199,7 @@ export class RouterModel implements LanguageModelV3 {
       this.onEvent?.({ type: 'trying', candidate })
       const model = this.buildModel(candidate)
       const result = await Promise.resolve()
-        .then(() => run(model))
+        .then(() => run(model, candidate))
         .then(
           (value) => ({ ok: true as const, value }),
           (error) => ({
@@ -190,9 +207,20 @@ export class RouterModel implements LanguageModelV3 {
             error: error instanceof Error ? error : new Error(String(error)),
           }),
         )
-      if (result.ok) return result.value
+      const inspected: Attempt<T> = result.ok
+        ? await Promise.resolve()
+            .then(() => inspect(result.value, candidate))
+            .then(
+              (value) => value,
+              (error) => ({
+                ok: false as const,
+                error: error instanceof Error ? error : new Error(String(error)),
+              }),
+            )
+        : result
+      if (inspected.ok) return inspected.value
 
-      const error = result.error
+      const error = inspected.error
       const action = classifyFailure(failureDetailsFromError(error))
       if (!action) throw error
 
@@ -214,12 +242,138 @@ export class RouterModel implements LanguageModelV3 {
   }
 
   async doGenerate(options: LanguageModelV3CallOptions) {
-    return this.withFailover((model) => model.doGenerate(options))
+    return this.withFailover((model, candidate) =>
+      model.doGenerate(candidateCallOptions({ options, candidate })),
+    )
   }
 
   async doStream(options: LanguageModelV3CallOptions) {
-    return this.withFailover((model) => model.doStream(options))
+    return this.withFailover(
+      (model, candidate) => model.doStream(candidateCallOptions({ options, candidate })),
+      (result, candidate) =>
+        inspectStream({
+          result,
+          onCommittedError: (error) => recordStreamCooldown({ candidate, error }),
+        }),
+    )
   }
+}
+
+async function inspectStream({
+  result,
+  onCommittedError,
+}: {
+  result: LanguageModelV3StreamResult
+  onCommittedError: (error: Error) => Promise<void>
+}): Promise<Attempt<LanguageModelV3StreamResult>> {
+  const reader = result.stream.getReader()
+  const buffered: LanguageModelV3StreamPart[] = []
+  while (true) {
+    const next = await reader
+      .read()
+      .catch((error) => (error instanceof Error ? error : new Error(String(error))))
+    if (next instanceof Error) return { ok: false, error: next }
+    if (next.done) {
+      return {
+        ok: true,
+        value: { ...result, stream: continueStream({ reader, buffered, onCommittedError }) },
+      }
+    }
+    if (next.value.type === 'error') {
+      return {
+        ok: false,
+        error:
+          next.value.error instanceof Error
+            ? next.value.error
+            : new Error(String(next.value.error)),
+      }
+    }
+    buffered.push(next.value)
+    if (next.value.type === 'stream-start' || next.value.type === 'response-metadata') continue
+    return {
+      ok: true,
+      value: { ...result, stream: continueStream({ reader, buffered, onCommittedError }) },
+    }
+  }
+}
+
+function continueStream({
+  reader,
+  buffered,
+  onCommittedError,
+}: {
+  reader: ReadableStreamDefaultReader<LanguageModelV3StreamPart>
+  buffered: LanguageModelV3StreamPart[]
+  onCommittedError: (error: Error) => Promise<void>
+}) {
+  let recordedCooldown = false
+  const record = async (error: Error) => {
+    if (recordedCooldown) return
+    await onCommittedError(error)
+    recordedCooldown = true
+  }
+  let bufferedIndex = 0
+  return new ReadableStream<LanguageModelV3StreamPart>({
+    async pull(controller) {
+      if (bufferedIndex < buffered.length) {
+        controller.enqueue(buffered[bufferedIndex++]!)
+        return
+      }
+      const next = await reader
+        .read()
+        .catch((error) => (error instanceof Error ? error : new Error(String(error))))
+      if (next instanceof Error) {
+        await record(next)
+        controller.error(next)
+        return
+      }
+      if (next.done) {
+        controller.close()
+        return
+      }
+      if (next.value.type === 'error') {
+        await record(
+          next.value.error instanceof Error
+            ? next.value.error
+            : new Error(String(next.value.error)),
+        )
+      }
+      controller.enqueue(next.value)
+    },
+    cancel: reader.cancel.bind(reader),
+  })
+}
+
+async function recordStreamCooldown({ candidate, error }: { candidate: Candidate; error: Error }) {
+  const action = classifyFailure(failureDetailsFromError(error))
+  if (!action) return
+  await markCooldown({
+    provider: candidate.provider,
+    account: candidate.account,
+    untilMs: Date.now() + action.cooldownMs,
+  })
+}
+
+function candidateCallOptions({
+  options,
+  candidate,
+}: {
+  options: LanguageModelV3CallOptions
+  candidate: Candidate
+}) {
+  const headers = new Headers()
+  for (const [key, value] of Object.entries(options.headers ?? {})) {
+    if (value !== undefined) headers.set(key, value)
+  }
+  const sessionId = headers.get(OPENAI_WEBSOCKET_SESSION_HEADER)
+  const title = headers.get(OPENAI_WEBSOCKET_TITLE_HEADER)
+  headers.delete(OPENAI_WEBSOCKET_SESSION_HEADER)
+  headers.delete(OPENAI_WEBSOCKET_TITLE_HEADER)
+  if (candidate.provider === 'openai' && sessionId) {
+    headers.set(OPENAI_WEBSOCKET_SESSION_HEADER, sessionId)
+  }
+  if (candidate.provider === 'openai' && title) headers.set(OPENAI_WEBSOCKET_TITLE_HEADER, title)
+  return { ...options, headers: Object.fromEntries(headers) }
 }
 
 /**
