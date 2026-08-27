@@ -222,7 +222,30 @@ npx @subrouter/cli cooldown clear [--force] # retry every account now
 npx @subrouter/cli account status anthropic
 ```
 
+`account status` exits **1 while a login is still running**, even when older accounts are already stored, so polling it never mistakes yesterday's expired token for today's login.
+
 API-key providers accept `--input` in non-interactive shells. Destructive commands ask for confirmation in a terminal and require `--force` elsewhere.
+
+### Replaying the redirect URL
+
+Browser logins finish on a **localhost callback server** owned by the running login process. When the browser cannot reach that server (a remote box, a chat bot driving the flow, a redirect that landed after you closed the tab), copy the final redirect URL and replay it by hand:
+
+```bash
+curl 'http://localhost:53692/callback?code=...&state=...'
+# Authentication successful. You can close this window.
+```
+
+The server accepts any `GET`, so this is the same request the browser would have made.
+
+```diagram
+subrouter login anthropic
+        │
+        ├──> daemon listens on 127.0.0.1:53692  <── curl replay works here
+        │
+        └──> 30 min timeout ──> server closes ──> replay gets connection refused
+```
+
+The window is **30 minutes**. After that the PKCE verifier is gone with the process, so run `login` again. If the browser lives on a different machine entirely, set `SUBROUTER_MANUAL_OAUTH=1` and pass the redirect URL to `--input` instead.
 
 The `default` preset is built in. It uses the newest model from each provider in the order shown above, filtered to subscriptions with stored accounts. Create a preset named `default` to override it.
 

@@ -80,12 +80,23 @@ Only the **npm package name** must be scoped.
 
 ### The bin field must use the object form
 
-Scoped packages derive the binary name from the package name with the scope stripped, so the string form (`"bin": "dist/cli.js"`) would install a binary called `cli`:
+Scoped packages derive the binary name from the package name with the scope stripped, so the string form (`"bin": "dist/bin.js"`) would install a binary called `bin`:
 
 ```json
 "bin": {
-  "subrouter": "dist/cli.js"
+  "subrouter": "dist/bin.js"
 }
+```
+
+### The executable entry is `bin.ts`, not `cli.ts`
+
+`src/cli.ts` only builds the goke command tree and exports `cli`. `src/bin.ts` is the only file that calls `cli.parse(process.argv)`.
+
+Running `node cli/dist/cli.js <command>` therefore **prints nothing and exits 0**. It is not a broken build; no command ever runs. Always run the CLI through the real entry:
+
+```bash
+node cli/dist/bin.js login anthropic   # built
+bun cli/src/bin.ts login anthropic     # from source
 ```
 
 ### Renaming touches three importers at once
