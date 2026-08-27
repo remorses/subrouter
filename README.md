@@ -68,7 +68,7 @@ pi --model subrouter/default
 
 When Claude hits its usage limit mid-session, the next request transparently goes to your ChatGPT subscription. When that one is exhausted too, it goes to Grok.
 
-You only see an error when **every** subscription is out.
+Quota and authentication failures move through the pool until every subscription is out. Normal request errors return immediately, so Subrouter does not repeat a bad request across every subscription.
 
 The CLI command reference below covers account management, custom presets, cooldowns, and shell completions.
 

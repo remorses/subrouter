@@ -3,7 +3,7 @@
 subrouter is like OpenRouter, but for **personal AI subscriptions**. Most users pay for several subscriptions (Claude Pro/Max, ChatGPT Plus/Pro, SuperGrok / Grok Build, Cursor, opencode Go). When one runs out of credits, the user has to stop working, switch models in every harness, and re-login constantly. subrouter fixes both problems:
 
 - it cycles through multiple subscriptions when one runs out of credits
-- it cycles between subscriptions of **different providers**, following the user's preferred ranking, and only errors when every subscription is exhausted
+- it cycles between subscriptions of **different providers** for quota and authentication failures, following the user's preferred ranking
 
 **Personal use only.** Using subrouter to serve tenant/third-party traffic is against the terms of use of most (if not all) subscription providers. Never add features that encourage multi-tenant serving.
 
