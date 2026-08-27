@@ -133,7 +133,11 @@ describe('account status', () => {
     async () => {
       await addAccount({ provider: 'poe', account })
       try {
-        expect((await runCli('login', 'poe')).code).toBe(0)
+        const login = await runCli('login', 'poe')
+        expect(login.code).toBe(0)
+        // The whole point of a background login: the human reading a chat window
+        // must get the authorize URL, exactly once, without a second command.
+        expect(`${login.stdout}${login.stderr}`.match(/poe\.com\/oauth\/authorize/g)).toHaveLength(1)
 
         const status = await runCli('account', 'status', 'poe')
         expect(status.code).toBe(1)

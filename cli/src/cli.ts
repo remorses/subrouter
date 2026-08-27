@@ -277,7 +277,13 @@ for (const id of PROVIDER_IDS) {
         const state = await waitForLoginState(id, ctx)
         if (state.status === 'error') fail(ctx, state.error ?? 'Login failed')
         if (state.instructions) ctx.console.error(state.instructions)
-        if (state.url && process.stdin.isTTY) await openInBrowser(state.url)
+        // Instructions then URL, the same order `account status` uses. Printing
+        // the URL here is the whole point of a background login: the person
+        // reading a chat window has no other way to reach it.
+        if (state.url) {
+          ctx.console.error(state.url)
+          if (process.stdin.isTTY) await openInBrowser(state.url)
+        }
         ctx.console.log(
           `Login running in background. After approving, verify with: subrouter account status ${id}`,
         )
