@@ -15,6 +15,7 @@ import * as errore from 'errore'
 import { createServer } from 'node:http'
 import { accountKey, type StoredAccount } from '../store.ts'
 import {
+  callbackLoginInstructions,
   resolveBaseUrl,
   type BeginLoginArgs,
   type LoginSession,
@@ -40,7 +41,7 @@ const ISSUER = 'https://auth.openai.com'
 const CODEX_API_ENDPOINT = 'https://chatgpt.com/backend-api/codex/responses'
 const OAUTH_PORT = 1455
 const OAUTH_CALLBACK_PATH = '/auth/callback'
-const OAUTH_TIMEOUT_MS = 5 * 60 * 1000
+const OAUTH_TIMEOUT_MS = 30 * 60 * 1000
 const POLL_SAFETY_MARGIN_MS = 3_000
 
 type TokenResponse = {
@@ -324,7 +325,7 @@ async function beginBrowserLogin(args?: BeginLoginArgs): Promise<Error | LoginSe
     }),
     instructions: args?.manualInput
       ? 'Authorize ChatGPT in your browser, then paste the final localhost redirect URL.'
-      : 'Authorize ChatGPT in your browser. The localhost callback completes login automatically.',
+      : callbackLoginInstructions({ subscription: 'ChatGPT', redirectUri }),
     method: args?.manualInput ? 'code' : 'auto',
     complete(input) {
       pending ??= (async () => {

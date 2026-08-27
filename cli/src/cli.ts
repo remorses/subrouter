@@ -47,10 +47,16 @@ type LoginState = {
 }
 
 const CODE_LOGIN_PROVIDERS = new Set<ProviderId>(['opencode', 'minimax', 'kimi', 'zai', 'alibaba'])
-const LOGIN_TIMEOUT_MS = 10 * 60 * 1000
+// Must outlive the adapter OAuth wait (30 min) or the daemon kills the callback
+// server before the browser redirect can arrive.
+const LOGIN_TIMEOUT_MS = 35 * 60 * 1000
 
-function loginStatePath() {
-  return path.join(subrouterHome(), 'login.json')
+function loginStatePath(provider: ProviderId) {
+  return path.join(subrouterHome(), `login-${provider}.json`)
+}
+
+function loginDaemonName(provider: ProviderId) {
+  return `login ${provider}`
 }
 
 function exit(ctx: GokeExecutionContext, code: number): never {
@@ -138,13 +144,13 @@ async function confirmDestructive({
 }
 
 async function writeLoginState(state: LoginState) {
-  await writeJson(loginStatePath(), state)
+  await writeJson(loginStatePath(state.provider), state)
 }
 
-async function waitForLoginState(ctx: GokeExecutionContext) {
+async function waitForLoginState(provider: ProviderId, ctx: GokeExecutionContext) {
   const deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
-    const state = await readJson<LoginState | null>(loginStatePath(), null)
+    const state = await readJson<LoginState | null>(loginStatePath(provider), null)
     if (state) return state
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
@@ -177,7 +183,9 @@ async function completeLogin({
         await writeLoginState({
           provider: id,
           status: 'pending',
-          instructions: messages.join('\n'),
+          // runLogin logs the authorize URL as its own message; drop it here or
+          // readers that print `instructions` then `url` show it twice.
+          instructions: messages.filter((message) => message !== url).join('\n'),
           url,
         })
         return
@@ -201,96 +209,90 @@ async function completeLogin({
 
 // --- login / logout ---
 
-cli
-  .command(
-    'login [provider]',
-    dedent`
-      Log in to a subscription and add it to the rotation pool.
+/** Providers whose browser redirect lands on a localhost callback server. */
+const CALLBACK_LOGIN_PROVIDERS = new Set<ProviderId>(['anthropic', 'openai', 'poe'])
 
-      Providers: \`anthropic\` (Claude Pro/Max), \`openai\` (ChatGPT via Codex),
-      \`xai\` (SuperGrok), \`opencode\` (opencode Go), \`github-copilot\`,
-      \`poe\`, \`minimax\`, \`kimi\`, \`zai\`, and \`alibaba\`.
-      Run it again with the same provider to add more accounts.
-    `,
-  )
-  .option(
-    '--method [method]',
-    z.enum(['browser', 'device']).optional().describe('OpenAI login method: browser or device'),
-  )
-  .option(
-    '--input [input]',
-    z.string().optional().describe('Redirect URL or subscription key for non-interactive login'),
-  )
-  .example('subrouter login anthropic')
-  .example('subrouter login openai --method browser')
-  .example('subrouter login xai')
-  .example('subrouter login github-copilot')
-  .example('subrouter login poe')
-  .example('subrouter login opencode')
-  .example('subrouter login minimax')
-  .example('subrouter login kimi')
-  .example('subrouter login zai')
-  .example('subrouter login alibaba')
-  .action(async (provider, options, ctx) => {
-    const id = await pickProvider(provider, ctx)
-    if (options.method && id !== 'openai') {
-      fail(ctx, '`--method` is only supported for OpenAI login')
-    }
-    const requestedMethod =
-      typeof options.method === 'string' && options.method ? options.method : undefined
-    const method = id === 'openai' ? await pickOpenAIMethod(requestedMethod, ctx) : undefined
-    const adapter = adapters[id]
-    const input = typeof options.input === 'string' && options.input ? options.input : undefined
-    if (
-      input &&
-      (id === 'xai' || id === 'github-copilot' || (id === 'openai' && method === 'device'))
-    ) {
-      fail(ctx, `\`--input\` is not supported for ${id} device login`)
-    }
+function loginDescription(id: ProviderId) {
+  const first = `Log in to ${adapters[id].name}. Run it again to add another account to the rotation pool.`
+  if (!CALLBACK_LOGIN_PROVIDERS.has(id)) return first
+  return dedent`
+    ${first}
 
-    if (ctx.daemon.isDaemon) {
-      const account = await completeLogin({ id, method, background: true, ctx })
-      if (account instanceof Error) {
-        await writeLoginState({ provider: id, status: 'error', error: account.message })
-        fail(ctx, account.message)
+    The browser redirect lands on a localhost callback server owned by this login
+    process, and the command prints that callback URL next to the authorize URL.
+    If the browser cannot deliver the redirect, replay it by hand while the login
+    is still running: \`curl '<callback-url>?code=...&state=...'\`. Once the login
+    exits, its PKCE verifier is gone and the redirect is worthless.
+  `
+}
+
+for (const id of PROVIDER_IDS) {
+  cli
+    .command(`login ${id}`, loginDescription(id))
+    .example(`subrouter login ${id}`)
+    .option(
+      '--method [method]',
+      z.enum(['browser', 'device']).optional().describe('OpenAI login method: browser or device'),
+    )
+    .option(
+      '--input [input]',
+      z.string().optional().describe('Redirect URL or subscription key for non-interactive login'),
+    )
+    .action(async (options, ctx) => {
+      const requestedMethod = options.method || undefined
+      if (requestedMethod && id !== 'openai') {
+        fail(ctx, '`--method` is only supported for OpenAI login')
       }
+      const method = id === 'openai' ? await pickOpenAIMethod(requestedMethod, ctx) : undefined
+      const input = options.input || undefined
+      if (
+        input &&
+        (id === 'xai' || id === 'github-copilot' || (id === 'openai' && method === 'device'))
+      ) {
+        fail(ctx, `\`--input\` is not supported for ${id} device login`)
+      }
+
+      if (ctx.daemon.isDaemon) {
+        const account = await completeLogin({ id, method, background: true, ctx })
+        if (account instanceof Error) {
+          await writeLoginState({ provider: id, status: 'error', error: account.message })
+          fail(ctx, account.message)
+        }
+        await addAccount({ provider: id, account })
+        await ctx.fs.rm(loginStatePath(id), { force: true })
+        return
+      }
+
+      const manualOAuth =
+        (id === 'anthropic' || id === 'poe' || (id === 'openai' && method === 'browser')) &&
+        Boolean(ctx.process.env.SUBROUTER_MANUAL_OAUTH)
+      const requiresInput = CODE_LOGIN_PROVIDERS.has(id) || manualOAuth
+      if ((isAgent || !process.stdin.isTTY) && requiresInput && !input) {
+        fail(ctx, `Missing --input. Usage: subrouter login ${id} --input <value>`)
+      }
+
+      if ((isAgent || !process.stdin.isTTY) && !input) {
+        await ctx.fs.rm(loginStatePath(id), { force: true })
+        await ctx.daemon.start({ timeoutMs: LOGIN_TIMEOUT_MS })
+        const state = await waitForLoginState(id, ctx)
+        if (state.status === 'error') fail(ctx, state.error ?? 'Login failed')
+        if (state.instructions) ctx.console.error(state.instructions)
+        if (state.url && process.stdin.isTTY) await openInBrowser(state.url)
+        ctx.console.log(
+          `Login running in background. After approving, verify with: subrouter account status ${id}`,
+        )
+        return
+      }
+
+      const account = await completeLogin({ id, method, input, background: false, ctx })
+      if (account instanceof Error) fail(ctx, account.message)
       await addAccount({ provider: id, account })
-      await ctx.fs.rm(loginStatePath(), { force: true })
-      return
-    }
-
-    const manualOAuth =
-      (id === 'anthropic' || id === 'poe' || (id === 'openai' && method === 'browser')) &&
-      Boolean(ctx.process.env.SUBROUTER_MANUAL_OAUTH)
-    const requiresInput = CODE_LOGIN_PROVIDERS.has(id) || manualOAuth
-    if ((isAgent || !process.stdin.isTTY) && requiresInput && !input) {
-      fail(ctx, `Missing --input. Usage: subrouter login ${id} --input <value>`)
-    }
-
-    if ((isAgent || !process.stdin.isTTY) && !input) {
-      await ctx.fs.rm(loginStatePath(), { force: true })
-      await ctx.daemon.start({ timeoutMs: LOGIN_TIMEOUT_MS })
-      const state = await waitForLoginState(ctx)
-      if (state.status === 'error') fail(ctx, state.error ?? 'Login failed')
-      if (state.instructions) ctx.console.error(state.instructions)
-      if (state.url && process.stdin.isTTY) await openInBrowser(state.url)
-      ctx.console.log(
-        `Login running in background. After approving, verify with: subrouter account status ${id}`,
-      )
-      return
-    }
-
-    const account = await completeLogin({
-      id,
-      method,
-      input,
-      background: false,
-      ctx,
+      // Drop any error left by an earlier attempt, or `account status` would keep
+      // reporting it after this login succeeded.
+      await ctx.fs.rm(loginStatePath(id), { force: true })
+      ctx.console.log(colors.green(`Logged in to ${adapters[id].name} as ${accountLabel(account)}`))
     })
-    if (account instanceof Error) fail(ctx, account.message)
-    await addAccount({ provider: id, account })
-    ctx.console.log(colors.green(`Logged in to ${adapter.name} as ${accountLabel(account)}`))
-  })
+}
 
 cli
   .command('logout <provider>', 'Remove all stored accounts for a provider')
@@ -311,11 +313,8 @@ cli
         ctx,
       })
     }
-    const loginState = await readJson<LoginState | null>(loginStatePath(), null)
-    if (loginState?.provider === provider) {
-      await ctx.daemon.forCommand('login').stop()
-      await ctx.fs.rm(loginStatePath(), { force: true })
-    }
+    await ctx.daemon.forCommand(loginDaemonName(provider)).stop()
+    await ctx.fs.rm(loginStatePath(provider), { force: true })
     for (let i = count - 1; i >= 0; i--) {
       const removed = await removeAccount({ provider, index: i })
       if (removed instanceof Error) {
@@ -382,22 +381,28 @@ cli
   .example('subrouter account status anthropic')
   .action(async (provider, _options, ctx) => {
     const id = await pickProvider(provider, ctx)
+    // The login state is checked before the stored accounts on purpose. Counting
+    // accounts first reported success for a login that never finished, because
+    // the expired account the user was replacing was still on disk. Every login
+    // path clears this file once it stores an account.
+    const state = await readJson<LoginState | null>(loginStatePath(id), null)
+    if (state?.provider === id && state.status === 'pending') {
+      if (await ctx.daemon.forCommand(loginDaemonName(id)).isRunning()) {
+        ctx.console.error(`Login to ${id} is in progress.`)
+        if (state.instructions) ctx.console.error(state.instructions)
+        if (state.url) ctx.console.error(state.url)
+        exit(ctx, 1)
+      }
+      fail(ctx, `Login to ${id} stopped before it finished. Run \`subrouter login ${id}\` again.`)
+    }
+    if (state?.provider === id && state.status === 'error') {
+      fail(ctx, state.error ?? `Login to ${id} failed`)
+    }
+
     const count = (await loadAccounts()).providers[id]?.accounts.length ?? 0
     if (count > 0) {
       ctx.console.log(`Logged in to ${id} with ${count} account(s).`)
       return
-    }
-
-    const loginRunning = await ctx.daemon.forCommand('login').isRunning()
-    const state = await readJson<LoginState | null>(loginStatePath(), null)
-    if (state?.provider === id && loginRunning && state.status === 'pending') {
-      ctx.console.error(`Login to ${id} is in progress.`)
-      if (state.instructions) ctx.console.error(state.instructions)
-      if (state.url) ctx.console.error(state.url)
-      exit(ctx, 1)
-    }
-    if (state?.provider === id && state.status === 'error') {
-      fail(ctx, state.error ?? `Login to ${id} failed`)
     }
     fail(ctx, `Not logged in to ${id}. Run \`subrouter login ${id}\`.`)
   })

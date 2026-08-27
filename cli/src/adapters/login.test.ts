@@ -197,6 +197,18 @@ describe('anthropic login', () => {
     expect(sessions.every((session) => !(session instanceof Error))).toBe(true)
   })
 
+  // The callback server accepts any GET, so a redirect URL captured in a browser
+  // that cannot reach this machine can still be replayed with curl. The
+  // instructions must say so, because harnesses print them verbatim.
+  test('auto instructions explain how to replay the redirect URL', async () => {
+    const session = await anthropicAdapter.beginLogin()
+    if (session instanceof Error) throw session
+    session.cancel?.()
+
+    expect(session.instructions).toContain('curl')
+    expect(session.instructions).toContain('http://localhost:53692/callback')
+  })
+
   test('manualInput switches the flow to a pasted redirect URL', async () => {
     const auto = await anthropicAdapter.beginLogin()
     if (auto instanceof Error) throw auto

@@ -246,6 +246,30 @@ export function resolveBaseUrl({
   return fallback
 }
 
+/**
+ * Instructions for a browser login that finishes on a localhost callback.
+ *
+ * The callback server accepts any GET, so a redirect URL captured in a browser
+ * that cannot reach this process can simply be replayed with curl. Harnesses
+ * print `instructions` verbatim, and this rescue path is the difference between
+ * a lost login and a finished one, so it is spelled out here rather than left
+ * as folklore. It only works while the login is still running: the server lives
+ * in that process and closes with it.
+ */
+export function callbackLoginInstructions({
+  subscription,
+  redirectUri,
+}: {
+  subscription: string
+  redirectUri: string
+}) {
+  return [
+    `Authorize ${subscription} in your browser. The localhost callback completes the login automatically.`,
+    'If the browser cannot reach this machine, copy the final redirect URL from the address bar and replay it while this login is still running:',
+    `curl '${redirectUri}?code=...&state=...'`,
+  ].join('\n')
+}
+
 // --- Failure classification ---
 
 export type FailureAction = {

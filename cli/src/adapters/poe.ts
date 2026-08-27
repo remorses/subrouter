@@ -4,7 +4,13 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import * as errore from 'errore'
 import { createServer, type Server } from 'node:http'
 import type { StoredAccount } from '../store.ts'
-import { resolveBaseUrl, type BeginLoginArgs, type LoginSession, type ProviderAdapter } from './index.ts'
+import {
+  callbackLoginInstructions,
+  resolveBaseUrl,
+  type BeginLoginArgs,
+  type LoginSession,
+  type ProviderAdapter,
+} from './index.ts'
 
 export class PoeAuthError extends errore.createTaggedError({
   name: 'PoeAuthError',
@@ -14,7 +20,7 @@ export class PoeAuthError extends errore.createTaggedError({
 const CLIENT_ID = 'client_728290227fc048cc9262091a1ea197ea'
 const CALLBACK_PATH = '/callback'
 const MANUAL_REDIRECT_URI = `http://127.0.0.1:53693${CALLBACK_PATH}`
-const OAUTH_TIMEOUT_MS = 5 * 60 * 1000
+const OAUTH_TIMEOUT_MS = 30 * 60 * 1000
 
 function poeApiUrl() {
   return resolveBaseUrl({ envVar: 'SUBROUTER_POE_BASE_URL', fallback: 'https://api.poe.com/v1' })
@@ -146,7 +152,7 @@ async function beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> 
     url: buildPoeAuthorizeUrl({ redirectUri, challenge: pkce.challenge, state }),
     instructions: args?.manualInput
       ? 'Authorize Poe in your browser, then paste the final localhost redirect URL.'
-      : 'Authorize Poe in your browser. The localhost callback completes login automatically.',
+      : callbackLoginInstructions({ subscription: 'Poe', redirectUri }),
     method: args?.manualInput ? 'code' : 'auto',
     complete(input) {
       pending ??= (async () => {

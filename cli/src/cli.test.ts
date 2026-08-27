@@ -14,6 +14,7 @@ import {
   markCooldown,
   savePreset,
   type StoredAccount,
+  writeJson,
 } from './store.ts'
 
 const execFileAsync = promisify(execFile)
@@ -30,7 +31,7 @@ async function runCli(...args: string[]): Promise<{
       ['--import', 'tsx', 'src/bin.ts', ...args],
       {
         cwd: packageRoot,
-        env: { ...process.env, AI_AGENT: 'codex', SUBROUTER_HOME: home },
+        env: { ...process.env, AI_AGENT: 'codex', HOME: home, SUBROUTER_HOME: home },
       },
     )
     return { code: 0, stdout: result.stdout, stderr: result.stderr }
@@ -89,11 +90,78 @@ describe('destructive commands', () => {
 })
 
 describe('account status', () => {
+  test(
+    'tracks concurrent login jobs independently by provider',
+    async () => {
+      try {
+        const [openai, poe] = await Promise.all([
+          runCli('login', 'openai', '--method', 'browser'),
+          runCli('login', 'poe'),
+        ])
+        expect(
+          [openai.code, poe.code],
+          JSON.stringify({ openai, poe }, null, 2),
+        ).toEqual([0, 0])
+
+        const [openaiStatus, poeStatus] = await Promise.all([
+          runCli('account', 'status', 'openai'),
+          runCli('account', 'status', 'poe'),
+        ])
+        expect(openaiStatus.stderr).toContain('Login to openai is in progress.')
+        expect(poeStatus.stderr).toContain('Login to poe is in progress.')
+      } finally {
+        await Promise.all([
+          runCli('logout', 'openai', '--force'),
+          runCli('logout', 'poe', '--force'),
+        ])
+      }
+    },
+    15_000,
+  )
+
   test('exits nonzero until the provider has an account', async () => {
     expect((await runCli('account', 'status', 'anthropic')).code).toBe(1)
 
     await addAccount({ provider: 'anthropic', account })
     expect((await runCli('account', 'status', 'anthropic')).code).toBe(0)
+  })
+
+  // A stale account must never mask a login that is still running: the old
+  // token is usually the expired one the user is replacing right now.
+  test(
+    'a running login outranks an already stored account',
+    async () => {
+      await addAccount({ provider: 'poe', account })
+      try {
+        expect((await runCli('login', 'poe')).code).toBe(0)
+
+        const status = await runCli('account', 'status', 'poe')
+        expect(status.code).toBe(1)
+        expect(status.stderr).toContain('Login to poe is in progress.')
+        // The replay hint is the whole point of printing instructions again.
+        expect(status.stderr).toContain("curl 'http://127.0.0.1:")
+        expect(status.stderr.match(/poe\.com\/oauth\/authorize/g)).toHaveLength(1)
+      } finally {
+        await runCli('logout', 'poe', '--force')
+      }
+    },
+    15_000,
+  )
+
+  test('a failed login stays visible until the next login succeeds', async () => {
+    await addAccount({ provider: 'minimax', account })
+    await writeJson(path.join(home, 'login-minimax.json'), {
+      provider: 'minimax',
+      status: 'error',
+      error: 'MiniMax auth failed: timed out waiting for OAuth callback',
+    })
+
+    const failed = await runCli('account', 'status', 'minimax')
+    expect(failed.code).toBe(1)
+    expect(failed.stderr).toContain('timed out waiting for OAuth callback')
+
+    expect((await runCli('login', 'minimax', '--input', 'subscription-key')).code).toBe(0)
+    expect((await runCli('account', 'status', 'minimax')).code).toBe(0)
   })
 
   test('stores non-interactive key input without printing the secret', async () => {

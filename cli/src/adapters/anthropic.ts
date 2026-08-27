@@ -17,6 +17,7 @@ import * as errore from 'errore'
 import { createServer, type Server } from 'node:http'
 import type { StoredAccount } from '../store.ts'
 import {
+  callbackLoginInstructions,
   isPermanentRefreshFailure,
   resolveBaseUrl,
   type BeginLoginArgs,
@@ -43,7 +44,9 @@ const CALLBACK_PATH = '/callback'
 const REDIRECT_URI = `http://localhost:${CALLBACK_PORT}${CALLBACK_PATH}`
 const SCOPES =
   'org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload'
-const OAUTH_TIMEOUT_MS = 5 * 60 * 1000
+// 30 min: a login driven from a chat harness needs time for the human to see the
+// URL, solve hCaptcha and approve. Under 5 min the callback server dies first.
+const OAUTH_TIMEOUT_MS = 30 * 60 * 1000
 const CLAUDE_CODE_VERSION = '2.1.75'
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
@@ -287,7 +290,7 @@ async function beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> 
     url: `https://claude.ai/oauth/authorize?${authParams.toString()}`,
     instructions: args?.manualInput
       ? 'Authorize Claude Pro/Max in your browser, then paste the final redirect URL from the address bar. Pasting just the authorization code also works.'
-      : 'Authorize Claude Pro/Max in your browser on this machine. The localhost callback completes the login automatically.',
+      : callbackLoginInstructions({ subscription: 'Claude Pro/Max', redirectUri: REDIRECT_URI }),
     method: args?.manualInput ? 'code' : 'auto',
     complete(input) {
       pending ??= (async () => {
