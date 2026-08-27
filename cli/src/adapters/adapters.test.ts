@@ -3,6 +3,7 @@ import {
   classifyFailure,
   isPermanentRefreshFailure,
   loadModelsDevCatalog,
+  parseModelsDevCatalog,
   validateModelsDevModelIds,
 } from './index.ts'
 import { rewriteRequestPayload } from './anthropic.ts'
@@ -53,6 +54,72 @@ describe('isPermanentRefreshFailure', () => {
     expect(isPermanentRefreshFailure(new Error('invalid_grant'))).toBe(true)
     expect(isPermanentRefreshFailure(new Error('refresh token expired'))).toBe(true)
     expect(isPermanentRefreshFailure(new Error('network down'))).toBe(false)
+  })
+})
+
+describe('models.dev validation', () => {
+  const emptyProvider = { models: {} }
+  const payload = {
+    anthropic: emptyProvider,
+    openai: {
+      models: {
+        'text-only': { id: 'text-only', modalities: { output: ['text'] } },
+        multimodal: { id: 'multimodal', modalities: { output: ['image', 'text'] } },
+        'image-only': { id: 'image-only', modalities: { output: ['image'] } },
+        'audio-only': { id: 'audio-only', modalities: { output: ['audio'] } },
+        'video-only': { id: 'video-only', modalities: { output: ['video'] } },
+        'unknown-output': { id: 'unknown-output' },
+      },
+    },
+    xai: emptyProvider,
+    opencode: emptyProvider,
+    'github-copilot': emptyProvider,
+    poe: emptyProvider,
+    'minimax-coding-plan': emptyProvider,
+    'kimi-for-coding': emptyProvider,
+    'zai-coding-plan': emptyProvider,
+    'alibaba-coding-plan': emptyProvider,
+  }
+
+  test('keeps only models with text output', () => {
+    const catalog = parseModelsDevCatalog(payload)
+    expect(catalog).not.toBeInstanceOf(Error)
+    if (catalog instanceof Error) return
+
+    expect([...catalog.openai]).toEqual(['text-only', 'multimodal'])
+    expect(
+      validateModelsDevModelIds({
+        entries: ['openai/text-only', 'openai/multimodal'],
+        catalog,
+      }),
+    ).toBeNull()
+    expect(
+      [
+        'openai/image-only',
+        'openai/audio-only',
+        'openai/video-only',
+        'openai/unknown-output',
+        'openai/not-in-catalog',
+        'openai/',
+      ].map((entry) => validateModelsDevModelIds({ entries: [entry], catalog })),
+    ).toMatchInlineSnapshot(`
+      [
+        [InvalidModelError: Model openai/image-only is not available as a text-output language model in models.dev],
+        [InvalidModelError: Model openai/audio-only is not available as a text-output language model in models.dev],
+        [InvalidModelError: Model openai/video-only is not available as a text-output language model in models.dev],
+        [InvalidModelError: Model openai/unknown-output is not available as a text-output language model in models.dev],
+        [InvalidModelError: Model openai/not-in-catalog is not available as a text-output language model in models.dev],
+        [InvalidModelError: Model openai/ is not available as a text-output language model in models.dev],
+      ]
+    `)
+  })
+
+  test('rejects malformed model records clearly', () => {
+    const malformedPayload = {
+      ...payload,
+      openai: { models: { broken: { modalities: { output: ['text'] } } } },
+    }
+    expect(parseModelsDevCatalog(malformedPayload)).toMatchInlineSnapshot(`[ModelsDevError: Could not load model IDs from models.dev: invalid response shape]`)
   })
 })
 

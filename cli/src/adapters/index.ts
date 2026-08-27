@@ -139,12 +139,28 @@ export class ModelsDevError extends errore.createTaggedError({
 
 export class InvalidModelError extends errore.createTaggedError({
   name: 'InvalidModelError',
-  message: 'Model $model does not exist for provider $provider in models.dev',
+  message: 'Model $entry is not available as a text-output language model in models.dev',
 }) {}
 
+const modelsDevModelSchema = z.object({
+  id: z.string(),
+  modalities: z
+    .object({
+      output: z.array(z.string()).optional(),
+    })
+    .optional(),
+})
+
 const modelsDevProviderSchema = z
-  .object({ models: z.record(z.string(), z.object({ id: z.string() })) })
-  .transform(({ models }) => new Set(Object.keys(models)))
+  .object({ models: z.record(z.string(), modelsDevModelSchema) })
+  .transform(
+    ({ models }) =>
+      new Set(
+        Object.entries(models)
+          .filter(([, model]) => model.modalities?.output?.includes('text'))
+          .map(([modelId]) => modelId),
+      ),
+  )
 
 const modelsDevCatalogSchema = z
   .object({
@@ -174,6 +190,14 @@ const modelsDevCatalogSchema = z
 
 export type ModelsDevCatalog = z.infer<typeof modelsDevCatalogSchema>
 
+export function parseModelsDevCatalog(payload: object): ModelsDevError | ModelsDevCatalog {
+  const catalog = modelsDevCatalogSchema.safeParse(payload)
+  if (!catalog.success) {
+    return new ModelsDevError({ reason: 'invalid response shape', cause: catalog.error })
+  }
+  return catalog.data
+}
+
 export async function loadModelsDevCatalog() {
   const response = await fetch('https://models.dev/api.json', {
     signal: AbortSignal.timeout(10_000),
@@ -185,12 +209,11 @@ export async function loadModelsDevCatalog() {
     (cause) => new ModelsDevError({ reason: 'invalid JSON response', cause }),
   )
   if (payload instanceof Error) return payload
-
-  const catalog = modelsDevCatalogSchema.safeParse(payload)
-  if (!catalog.success) {
-    return new ModelsDevError({ reason: 'invalid response shape', cause: catalog.error })
+  if (!payload || typeof payload !== 'object') {
+    return new ModelsDevError({ reason: 'invalid response shape' })
   }
-  return catalog.data
+
+  return parseModelsDevCatalog(payload)
 }
 
 export function validateModelsDevModelIds({
@@ -204,9 +227,9 @@ export function validateModelsDevModelIds({
     const slash = entry.indexOf('/')
     const provider = entry.slice(0, slash)
     const model = entry.slice(slash + 1)
-    if (!isProviderId(provider)) return new InvalidModelError({ provider, model })
+    if (!isProviderId(provider)) return new InvalidModelError({ entry })
 
-    if (!catalog[provider].has(model)) return new InvalidModelError({ provider, model })
+    if (!catalog[provider].has(model)) return new InvalidModelError({ entry })
   }
   return null
 }
