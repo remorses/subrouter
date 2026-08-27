@@ -2,13 +2,14 @@
  * Subrouter local state: accounts, presets and cooldown state.
  *
  * Everything lives under ~/.subrouter (override with SUBROUTER_HOME, used by
- * tests). Files are plain JSON with 0600 permissions and a lock directory for
- * cross-process safety. The cooldown state is global on purpose: when a
- * subscription hits a rate limit, every process and harness on the machine
- * should stop retrying it until the cooldown expires.
+ * tests). Files are atomically replaced JSON with 0600 permissions and a lock
+ * directory for cross-process safety. The cooldown state is global on purpose:
+ * when a subscription hits a rate limit, every process and harness on the
+ * machine should stop retrying it until the cooldown expires.
  */
 
 import * as errore from 'errore'
+import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -66,9 +67,32 @@ export async function readJson<T>(filePath: string, fallback: T): Promise<T> {
 }
 
 export async function writeJson(filePath: string, value: object) {
-  await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, JSON.stringify(value, null, 2) + '\n', 'utf8')
-  await fs.chmod(filePath, 0o600).catch(() => {})
+  const directory = path.dirname(filePath)
+  const temporaryPath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
+  )
+  await fs.mkdir(directory, { recursive: true })
+
+  try {
+    const temporaryFile = await fs.open(temporaryPath, 'wx', 0o600)
+    try {
+      await temporaryFile.writeFile(JSON.stringify(value, null, 2) + '\n', 'utf8')
+      await temporaryFile.sync()
+    } finally {
+      await temporaryFile.close()
+    }
+    await fs.rename(temporaryPath, filePath)
+  } catch (error) {
+    const cleanupError = await fs.rm(temporaryPath, { force: true }).then(
+      () => null,
+      (cause) => cause,
+    )
+    if (cleanupError) {
+      throw new AggregateError([error, cleanupError], `Failed to replace JSON file ${filePath}`)
+    }
+    throw error
+  }
 }
 
 // --- Locking (lock directory, stale after 30s) ---

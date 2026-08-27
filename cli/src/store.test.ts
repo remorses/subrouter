@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -16,6 +16,7 @@ import {
   removePreset,
   savePreset,
   updateAccount,
+  writeJson,
   type StoredAccount,
 } from './store.ts'
 
@@ -42,6 +43,64 @@ function oauthAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
     ...overrides,
   }
 }
+
+describe('JSON persistence', () => {
+  test('atomically replaces the prior complete file', async () => {
+    const filePath = path.join(home, 'atomic.json')
+    const previous = JSON.stringify({ version: 1, value: 'previous' }, null, 2) + '\n'
+    await writeFile(filePath, previous)
+    await using previousFile = await open(filePath, 'r')
+
+    await writeJson(filePath, { version: 1, value: 'replacement' })
+
+    const previousContents = await previousFile.readFile('utf8')
+    const replacementContents = await open(filePath, 'r').then(async (replacementFile) => {
+      await using file = replacementFile
+      return file.readFile('utf8')
+    })
+    const mode = (await stat(filePath)).mode & 0o777
+
+    expect({ previousContents, replacementContents, mode, files: await readdir(home) })
+      .toMatchInlineSnapshot(`
+        {
+          "files": [
+            "atomic.json",
+          ],
+          "mode": 384,
+          "previousContents": "{
+          "version": 1,
+          "value": "previous"
+        }
+        ",
+          "replacementContents": "{
+          "version": 1,
+          "value": "replacement"
+        }
+        ",
+        }
+      `)
+  })
+
+  test('removes the temporary file when replacement fails', async () => {
+    const filePath = path.join(home, 'blocked.json')
+    const priorStatePath = path.join(filePath, 'prior-state.json')
+    await mkdir(filePath)
+    await writeFile(priorStatePath, '{"prior":true}\n')
+
+    await expect(writeJson(filePath, { replacement: true })).rejects.toThrow()
+
+    expect({ files: await readdir(home), priorState: await readFile(priorStatePath, 'utf8') })
+      .toMatchInlineSnapshot(`
+        {
+          "files": [
+            "blocked.json",
+          ],
+          "priorState": "{\"prior\":true}
+        ",
+        }
+      `)
+  })
+})
 
 describe('accounts', () => {
   test('add, upsert and remove accounts', async () => {
