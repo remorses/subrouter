@@ -170,6 +170,33 @@ describe('coding plan login', () => {
 })
 
 describe('anthropic login', () => {
+  test('auto sessions bind and close the localhost callback server', async () => {
+    const active = await anthropicAdapter.beginLogin()
+    if (active instanceof Error) throw active
+
+    const overlapping = await anthropicAdapter.beginLogin()
+    active.cancel?.()
+    if (!(overlapping instanceof Error)) overlapping.cancel?.()
+    expect(overlapping).toBeInstanceOf(Error)
+
+    const afterClose = await anthropicAdapter.beginLogin()
+    if (afterClose instanceof Error) throw afterClose
+    afterClose.cancel?.()
+  })
+
+  test('concurrent manual sessions do not bind the localhost callback port', async () => {
+    const sessions = await Promise.all([
+      anthropicAdapter.beginLogin({ manualInput: true }),
+      anthropicAdapter.beginLogin({ manualInput: true }),
+    ])
+    for (const session of sessions) {
+      if (session instanceof Error) continue
+      session.cancel?.()
+    }
+
+    expect(sessions.every((session) => !(session instanceof Error))).toBe(true)
+  })
+
   test('manualInput switches the flow to a pasted redirect URL', async () => {
     const auto = await anthropicAdapter.beginLogin()
     if (auto instanceof Error) throw auto

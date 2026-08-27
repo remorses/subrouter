@@ -263,9 +263,11 @@ async function resolveCallbackResult({
 
 async function beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> {
   const pkce = await generatePKCE()
-  const callbackServer = await startCallbackServer(pkce.verifier).catch(
-    (e) => new AnthropicAuthError({ reason: 'failed to start callback server', cause: e }),
-  )
+  const callbackServer = args?.manualInput
+    ? null
+    : await startCallbackServer(pkce.verifier).catch(
+        (e) => new AnthropicAuthError({ reason: 'failed to start callback server', cause: e }),
+      )
   if (callbackServer instanceof Error) return callbackServer
 
   const authParams = new URLSearchParams({
@@ -289,7 +291,12 @@ async function beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> 
     method: args?.manualInput ? 'code' : 'auto',
     complete(input) {
       pending ??= (async () => {
-        const result = await resolveCallbackResult({ callbackServer, input })
+        const trimmed = input?.trim()
+        const result = callbackServer
+          ? await resolveCallbackResult({ callbackServer, input })
+          : trimmed
+            ? parseManualInput(trimmed)
+            : new AnthropicAuthError({ reason: 'no authorization code provided' })
         if (result instanceof Error) return result
 
         const tokens = await postTokenRequest({
@@ -318,8 +325,8 @@ async function beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> 
       return pending
     },
     cancel() {
-      callbackServer.cancelWait()
-      callbackServer.server.close()
+      callbackServer?.cancelWait()
+      callbackServer?.server.close()
     },
   }
 }
