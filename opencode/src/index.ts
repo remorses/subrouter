@@ -46,8 +46,14 @@ export const subrouterPlugin: Plugin = async () => {
           {
             name: `subrouter ${name}`,
             tool_call: true,
-            attachment: false,
+            attachment: true,
             reasoning: false,
+            modalities: {
+              input: ['text', 'image', 'pdf'] satisfies Array<
+                'text' | 'image' | 'pdf'
+              >,
+              output: ['text'] satisfies Array<'text'>,
+            },
             cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
             limit: { context: 200_000, output: 64_000 },
           },

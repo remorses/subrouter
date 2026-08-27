@@ -3,12 +3,13 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, expect, test } from 'vitest'
-import type { PluginInput } from '@opencode-ai/plugin'
+import type { Config, PluginInput } from '@opencode-ai/plugin'
 import { loadAccounts, PROVIDER_IDS } from '@subrouter/cli'
 import { subrouterAuthPlugin, subrouterPlugin } from './index.ts'
 
 let home: string
 const openServers: Server[] = []
+const pluginInput = {} as PluginInput
 
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'subrouter-plugin-'))
@@ -65,7 +66,7 @@ async function startFakeOpenAIIssuer() {
 }
 
 function authMethod() {
-  return subrouterAuthPlugin({} as PluginInput).then((hooks) => {
+  return subrouterAuthPlugin(pluginInput).then((hooks) => {
     const method = hooks.auth?.methods[0]
     if (!method || method.type !== 'oauth') throw new Error('expected an oauth method')
     return { provider: hooks.auth!.provider, method }
@@ -78,7 +79,7 @@ test('config hook registers the subrouter provider with preset models', async ()
     JSON.stringify({ version: 1, presets: { work: ['anthropic/claude-opus-4-6'] } }),
   )
 
-  const hooks = await subrouterPlugin({} as PluginInput)
+  const hooks = await subrouterPlugin(pluginInput)
   const config: Record<string, any> = {}
   await hooks.config?.(config as any)
 
@@ -88,6 +89,20 @@ test('config hook registers the subrouter provider with preset models', async ()
   expect(provider.npm.endsWith('provider.ts') || provider.npm.endsWith('provider.js')).toBe(true)
   expect(Object.keys(provider.models).sort()).toEqual(['default', 'work'])
   expect(provider.models.default.cost).toEqual({ input: 0, output: 0, cache_read: 0, cache_write: 0 })
+})
+
+test('preset models permit image and PDF attachments', async () => {
+  const hooks = await subrouterPlugin(pluginInput)
+  const config: Config = {}
+  await hooks.config?.(config)
+
+  expect(config.provider?.subrouter?.models?.default).toMatchObject({
+    attachment: true,
+    modalities: {
+      input: ['text', 'image', 'pdf'],
+      output: ['text'],
+    },
+  })
 })
 
 test('auth hook asks which subscription to add before authorizing', async () => {
