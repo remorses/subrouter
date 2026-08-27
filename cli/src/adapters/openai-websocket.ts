@@ -98,11 +98,7 @@ export async function fetchOpenAIWithWebSocket({
       throw socket
     }
     releaseAfterFailure(entry)
-    if (entry.fallback) return httpFetch(input, httpInit)
-    return new Response(
-      new ReadableStream({ start: (controller) => controller.error(socket) }),
-      { status: 200, headers: { 'content-type': 'text/event-stream' } },
-    )
+    return httpFetch(input, httpInit)
   }
 
   entry.socket = socket
@@ -135,7 +131,7 @@ export async function fetchOpenAIWithWebSocket({
     },
   })
   const first = await firstEvent.promise
-  if (first === false) return entry.fallback ? httpFetch(input, httpInit) : response
+  if (first === false) return httpFetch(input, httpInit)
   if (first === true || first.status < 200 || first.status > 599) return response
   return new Response(first.body, {
     status: first.status,

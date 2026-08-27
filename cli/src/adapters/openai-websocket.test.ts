@@ -5,6 +5,7 @@ import type {
   LanguageModelV3CallOptions,
   LanguageModelV3StreamPart,
 } from '@ai-sdk/provider'
+import * as errore from 'errore'
 import http from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -80,6 +81,7 @@ function completionEvents({ text, responseId }: { text: string; responseId: stri
 
 async function startCodexServer(
   respond: (input: { authorization: string; request: JSONObject; socket: WebSocket }) => void,
+  { rejectWebSocket = false }: { rejectWebSocket?: boolean } = {},
 ) {
   const connections: Array<{ authorization: string; beta: string }> = []
   const websocketRequests: JSONObject[] = []
@@ -99,7 +101,10 @@ async function startCodexServer(
       response.end('data: [DONE]\n\n')
     })
   })
-  const webSocketServer = new WebSocketServer({ server })
+  const webSocketServer = new WebSocketServer({
+    server,
+    verifyClient: rejectWebSocket ? (_info, done) => done(false, 503, 'Unavailable') : undefined,
+  })
   webSocketServer.on('connection', (socket, request) => {
     const authorization = request.headers.authorization ?? ''
     connections.push({
@@ -195,6 +200,48 @@ describe('OpenAI Codex WebSocket transport', () => {
     expect(await textFromStream((await model.doStream({ ...callOptions, headers: {} })).stream)).toBe('http')
     expect(server.connections).toEqual([])
     expect(server.httpRequests).toHaveLength(1)
+  })
+
+  test('falls back to HTTP immediately when WebSocket cannot open', async () => {
+    const server = await startCodexServer(() => {}, { rejectWebSocket: true })
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    const account = oauthAccount({ accountId: 'account-1', access: 'access-1' })
+    const model = openaiAdapter.createModel({ modelId: 'gpt-test', account, persist: async () => {} })
+
+    expect(await textFromStream((await model.doStream(callOptions)).stream)).toBe('http')
+    expect(server.connections).toEqual([])
+    expect(server.httpRequests).toHaveLength(1)
+  })
+
+  test('falls back to HTTP when WebSocket closes before output', async () => {
+    const server = await startCodexServer(({ socket }) => {
+      socket.close(1011, 'transport failed')
+    })
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    const account = oauthAccount({ accountId: 'account-1', access: 'access-1' })
+    const model = openaiAdapter.createModel({ modelId: 'gpt-test', account, persist: async () => {} })
+
+    expect(await textFromStream((await model.doStream(callOptions)).stream)).toBe('http')
+    expect(server.connections).toHaveLength(1)
+    expect(server.httpRequests).toHaveLength(1)
+  })
+
+  test('propagates abort errors without HTTP fallback', async () => {
+    const server = await startCodexServer(() => {})
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    const account = oauthAccount({ accountId: 'account-1', access: 'access-1' })
+    const model = openaiAdapter.createModel({ modelId: 'gpt-test', account, persist: async () => {} })
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(
+      Promise.resolve(model.doStream({ ...callOptions, abortSignal: controller.signal })),
+    ).rejects.toSatisfy(errore.isAbortError)
+    expect(server.connections).toEqual([])
+    expect(server.httpRequests).toEqual([])
   })
 
   test('falls back to HTTP immediately when the request is too large for WebSocket', async () => {
