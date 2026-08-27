@@ -2,6 +2,31 @@
 
 # Changelog
 
+## 0.3.0
+
+1. **Complete browser and device login without blocking agents:** login now continues in a background process in agent and non-interactive shells. Approve the displayed URL, then poll until the account is ready:
+
+   ```bash
+   npx @subrouter/cli login anthropic
+   npx @subrouter/cli account status anthropic
+   ```
+
+2. **Pass login values explicitly with `--input`:** non-interactive shells can add API-key subscriptions or submit manual OAuth redirects without a prompt:
+
+   ```bash
+   npx @subrouter/cli login opencode --input "$OPENCODE_API_KEY"
+   SUBROUTER_MANUAL_OAUTH=1 npx @subrouter/cli login anthropic --input "$REDIRECT_URL"
+   ```
+
+3. **Confirm destructive commands before changing local state:** account removal, provider logout, preset replacement, preset removal, and cooldown clearing now ask for confirmation in a terminal. Scripts and agents can confirm explicitly with `--force`:
+
+   ```bash
+   npx @subrouter/cli account remove anthropic 2 --force
+   npx @subrouter/cli preset remove work --force
+   ```
+
+4. **Keep subscription keys out of account labels:** API-key accounts are now shown as `API key` instead of exposing part of the stored secret.
+
 ## 0.2.0
 
 1. **Route through six more personal subscription providers:** add GitHub Copilot, Poe, MiniMax Token Plan, Kimi Code, Z.ai GLM Coding Plan, and Alibaba Coding Plan accounts to the same ranked failover pool:
