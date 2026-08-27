@@ -18,11 +18,15 @@ Every time one runs out of credits you stop working and start fixing subscriptio
 
 ## Quick Start
 
+### 1. Add your subscriptions
+
+Run only the login commands for subscriptions you have. **One subscription is enough to start.**
+
 ```bash
-# add your subscriptions
 npx @subrouter/cli login anthropic
 npx @subrouter/cli login openai
 npx @subrouter/cli login xai
+npx @subrouter/cli login opencode
 npx @subrouter/cli login github-copilot
 npx @subrouter/cli login poe
 npx @subrouter/cli login minimax
@@ -31,7 +35,21 @@ npx @subrouter/cli login zai
 npx @subrouter/cli login alibaba
 ```
 
-Add `@subrouter/opencode` to the `plugin` array in `~/.config/opencode/opencode.json`:
+Run the same command again to add another account from the same provider. Subrouter rotates through those accounts before moving to the next provider.
+
+### 2. Check your setup
+
+```bash
+npx @subrouter/cli status
+```
+
+The built-in **`default` preset** ranks the newest model from each provider and automatically filters out providers without an account. You do not need to create a preset.
+
+### 3. Connect your harness
+
+Choose **opencode Go** or **Pi**.
+
+For opencode Go, add `@subrouter/opencode` to the `plugin` array in `~/.config/opencode/opencode.json`:
 
 ```json
 {
@@ -41,7 +59,7 @@ Add `@subrouter/opencode` to the `plugin` array in `~/.config/opencode/opencode.
 
 Restart opencode Go, then pick the model `subrouter/default`.
 
-Or install the Pi extension and pick the same model:
+For Pi, install the extension and pick the same model:
 
 ```bash
 pi install npm:@subrouter/pi
@@ -51,6 +69,8 @@ pi --model subrouter/default
 When Claude hits its usage limit mid-session, the next request transparently goes to your ChatGPT subscription. When that one is exhausted too, it goes to Grok.
 
 You only see an error when **every** subscription is out.
+
+The CLI command reference below covers account management, custom presets, cooldowns, and shell completions.
 
 > [!IMPORTANT]
 > Subrouter is for **personal use only**. Routing subscription traffic to serve other people or tenants is against the terms of use of most (if not all) subscription providers.
@@ -158,20 +178,40 @@ This narrow scope keeps **Subrouter much smaller and simpler**. It does not need
 
 Anthropic OAuth only works if requests look like **Claude Code CLI** requests. The OpenCode adapter and Pi's native provider apply the required identity, tool names, and beta headers.
 
-## CLI
+## CLI command reference
+
+Run commands directly with `npx @subrouter/cli`, or install the shorter `subrouter` command globally:
+
+```bash
+npm i -g @subrouter/cli
+```
+
+### Accounts
 
 ```bash
 npx @subrouter/cli login [provider] [--input value] # add a subscription to the pool
 npx @subrouter/cli logout <provider> [--force]      # remove all accounts for a provider
-npx @subrouter/cli account list [--json]    # accounts + cooldown status
+npx @subrouter/cli account list [--json]     # accounts + cooldown status
 npx @subrouter/cli account status [provider] # exits 1 until login completes
 npx @subrouter/cli account remove <provider> <n|email> [--force]
+```
 
+`account list` numbers accounts from 1. Run `login` again with the same provider to add another account to its rotation pool.
+
+### Presets
+
+```bash
 npx @subrouter/cli preset create <name> --models 'anthropic/claude-opus-4-6,xai/grok-4.6' [--force]
 npx @subrouter/cli preset list
 npx @subrouter/cli preset show <name>       # includes currently usable candidates
 npx @subrouter/cli preset remove <name> [--force]
+```
 
+The order passed to `--models` is the fallback order. Every preset appears in both harnesses as `subrouter/<name>`.
+
+### Status and cooldowns
+
+```bash
 npx @subrouter/cli status                   # everything at a glance
 npx @subrouter/cli cooldown clear [--force] # retry every account now
 ```
@@ -183,12 +223,6 @@ npx @subrouter/cli account status anthropic
 ```
 
 API-key providers accept `--input` in non-interactive shells. Destructive commands ask for confirmation in a terminal and require `--force` elsewhere.
-
-Prefer a short command? Install it globally and every example becomes `subrouter <command>`:
-
-```bash
-npm i -g @subrouter/cli
-```
 
 The `default` preset is built in. It uses the newest model from each provider in the order shown above, filtered to subscriptions with stored accounts. Create a preset named `default` to override it.
 

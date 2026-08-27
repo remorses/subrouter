@@ -215,19 +215,22 @@ cli
   )
   .option(
     '--method [method]',
-    z.enum(['browser', 'device']).optional().describe('OpenAI login method'),
+    z.enum(['browser', 'device']).optional().describe('OpenAI login method: browser or device'),
   )
   .option(
     '--input [input]',
-    z.string().optional().describe('Pasted redirect URL or subscription key'),
+    z.string().optional().describe('Redirect URL or subscription key for non-interactive login'),
   )
   .example('subrouter login anthropic')
   .example('subrouter login openai --method browser')
   .example('subrouter login xai')
   .example('subrouter login github-copilot')
   .example('subrouter login poe')
+  .example('subrouter login opencode')
   .example('subrouter login minimax')
   .example('subrouter login kimi')
+  .example('subrouter login zai')
+  .example('subrouter login alibaba')
   .action(async (provider, options, ctx) => {
     const id = await pickProvider(provider, ctx)
     if (options.method && id !== 'openai') {
