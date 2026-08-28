@@ -30,7 +30,7 @@ export type LoginArgs = {
   /** log progress (auth URL, user code) to the user */
   log: (message: string) => void
   /** open a URL in the user's browser (best effort) */
-  openUrl: (url: string) => Promise<void>
+  openUrl: (url: string, session: LoginSession) => Promise<void>
   /** ask the user to paste a code/redirect URL (interactive mode only) */
   promptManualInput?: () => Promise<string | null>
 }
@@ -109,7 +109,7 @@ export async function runLogin({
 
   log(session.instructions)
   log(session.url)
-  await openUrl(session.url)
+  await openUrl(session.url, session)
 
   if (session.method === 'auto') return session.complete()
 
@@ -267,6 +267,7 @@ export function callbackLoginInstructions({
     `Authorize ${subscription} in your browser. The localhost callback completes the login automatically.`,
     'If the browser cannot reach this machine, copy the final redirect URL from the address bar and replay it while this login is still running:',
     `curl '${redirectUri}?code=...&state=...'`,
+    'Run curl on the machine that started the login. The redirect URL contains a one-time credential; do not paste it into a shared chat.',
   ].join('\n')
 }
 

@@ -129,10 +129,13 @@ Rate-limit state lives in `~/.subrouter/state.json`, shared by every process and
 
 Adapters expose `beginLogin()` returning a `LoginSession`, not a blocking `login()`. Harnesses that cannot sit on a TTY (opencode's auth hook, and through it a Discord bot) need to show `url` + `instructions` immediately and finish later. `runLogin()` in `adapters/index.ts` is the blocking wrapper the CLI uses; never reintroduce a blocking `login` on the adapter interface.
 
+The CLI registers one `login <provider>` command and keeps each background attempt in `~/.subrouter/login-<provider>.json`, so different providers can log in concurrently. Every successful harness path calls `addAccount()`, which clears that provider's login state. Keep this invalidation centralized in the store; otherwise an old CLI error can mask a later harness login.
+
 Two contracts to protect:
 
 - **`instructions` is parsed, not just displayed.** Device flows must embed the code as `code: XXXX-XXXX` (uppercase alphanumeric plus dashes). Harnesses regex it out to render the code on its own line. `cli/src/adapters/login.test.ts` asserts this with the same regex kimaki uses.
 - **`complete()` is memoized.** Harnesses retry the callback. A second call must return the in-flight promise, not start a second device poll or a second token exchange.
+- **Callback redirects are credentials.** Anthropic places the PKCE verifier in `state`. A redirect can be replayed against the live localhost callback server, but instructions must tell users to run curl on the login machine and never paste the URL into a shared chat.
 
 `cancel()` releases anything the session holds, which for anthropic is a listening callback server on port 53692. Call it on any abandoned flow.
 

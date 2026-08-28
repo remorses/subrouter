@@ -151,7 +151,7 @@ async function beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> 
   return {
     url: buildPoeAuthorizeUrl({ redirectUri, challenge: pkce.challenge, state }),
     instructions: args?.manualInput
-      ? 'Authorize Poe in your browser, then paste the final localhost redirect URL.'
+      ? 'Authorize Poe in your browser, then paste the final localhost redirect URL into this prompt, never a shared chat.'
       : callbackLoginInstructions({ subscription: 'Poe', redirectUri }),
     method: args?.manualInput ? 'code' : 'auto',
     complete(input) {

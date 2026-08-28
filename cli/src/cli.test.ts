@@ -11,7 +11,9 @@ import {
   loadAccounts,
   loadPresets,
   loadState,
+  loginStatePath,
   markCooldown,
+  readJson,
   savePreset,
   type StoredAccount,
   writeJson,
@@ -31,7 +33,13 @@ async function runCli(...args: string[]): Promise<{
       ['--import', 'tsx', 'src/bin.ts', ...args],
       {
         cwd: packageRoot,
-        env: { ...process.env, AI_AGENT: 'codex', HOME: home, SUBROUTER_HOME: home },
+        env: {
+          ...process.env,
+          AI_AGENT: 'codex',
+          HOME: home,
+          SUBROUTER_HOME: home,
+          SUBROUTER_MANUAL_OAUTH: '',
+        },
       },
     )
     return { code: 0, stdout: result.stdout, stderr: result.stderr }
@@ -166,6 +174,19 @@ describe('account status', () => {
 
     expect((await runCli('login', 'minimax', '--input', 'subscription-key')).code).toBe(0)
     expect((await runCli('account', 'status', 'minimax')).code).toBe(0)
+  })
+
+  test('a dead login clears its pending state and falls through to stored accounts', async () => {
+    const loginPath = loginStatePath('anthropic')
+    await addAccount({ provider: 'anthropic', account })
+    await writeJson(loginPath, { provider: 'anthropic', status: 'pending' })
+
+    const status = await runCli('account', 'status', 'anthropic')
+
+    expect(status.code).toBe(0)
+    expect(status.stderr).toContain('Login to anthropic stopped before it finished.')
+    expect(status.stdout).toContain('Logged in to anthropic with 1 account(s).')
+    expect(await readJson(loginPath, null)).toBeNull()
   })
 
   test('stores non-interactive key input without printing the secret', async () => {

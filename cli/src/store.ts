@@ -1,5 +1,5 @@
 /**
- * Subrouter local state: accounts, presets and cooldown state.
+ * Subrouter local state: accounts, login attempts, presets and cooldowns.
  *
  * Everything lives under ~/.subrouter (override with SUBROUTER_HOME, used by
  * tests). Files are atomically replaced JSON with 0600 permissions and a lock
@@ -28,6 +28,14 @@ export const PROVIDER_IDS = [
 ] as const
 export type ProviderId = (typeof PROVIDER_IDS)[number]
 
+export type LoginState = {
+  provider: ProviderId
+  status: 'pending' | 'error'
+  instructions?: string
+  url?: string
+  error?: string
+}
+
 export function isProviderId(value: string): value is ProviderId {
   return PROVIDER_IDS.some((provider) => provider === value)
 }
@@ -54,6 +62,10 @@ export function presetsFilePath() {
 
 export function stateFilePath() {
   return path.join(subrouterHome(), 'state.json')
+}
+
+export function loginStatePath(provider: ProviderId) {
+  return path.join(subrouterHome(), `login-${provider}.json`)
 }
 
 // --- JSON I/O ---
@@ -250,6 +262,9 @@ export async function addAccount({
     file.providers[provider] = pool
     await saveAccounts(file)
   })
+  // Every harness stores successful logins through this function. Clearing the
+  // state here prevents an older CLI error from masking a later harness login.
+  await fs.rm(loginStatePath(provider), { force: true })
 }
 
 /** Persist updated tokens for an existing account (after a refresh). */

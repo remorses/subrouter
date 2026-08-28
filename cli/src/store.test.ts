@@ -8,6 +8,7 @@ import {
   addAccount,
   cooldownKey,
   isCoolingDown,
+  loginStatePath,
   loadAccounts,
   loadPresets,
   loadState,
@@ -103,6 +104,19 @@ describe('JSON persistence', () => {
 })
 
 describe('accounts', () => {
+  test('adding an account clears the provider login state', async () => {
+    const loginPath = loginStatePath('anthropic')
+    await writeJson(loginPath, {
+      provider: 'anthropic',
+      status: 'error',
+      error: 'earlier login failed',
+    })
+
+    await addAccount({ provider: 'anthropic', account: oauthAccount() })
+
+    await expect(stat(loginPath)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
   test('add, upsert and remove accounts', async () => {
     await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
     await addAccount({

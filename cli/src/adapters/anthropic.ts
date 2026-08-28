@@ -289,7 +289,7 @@ async function beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> 
   return {
     url: `https://claude.ai/oauth/authorize?${authParams.toString()}`,
     instructions: args?.manualInput
-      ? 'Authorize Claude Pro/Max in your browser, then paste the final redirect URL from the address bar. Pasting just the authorization code also works.'
+      ? 'Authorize Claude Pro/Max in your browser, then paste the final redirect URL into this prompt, never a shared chat. Pasting just the authorization code also works.'
       : callbackLoginInstructions({ subscription: 'Claude Pro/Max', redirectUri: REDIRECT_URI }),
     method: args?.manualInput ? 'code' : 'auto',
     complete(input) {

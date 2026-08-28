@@ -207,6 +207,7 @@ describe('anthropic login', () => {
 
     expect(session.instructions).toContain('curl')
     expect(session.instructions).toContain('http://localhost:53692/callback')
+    expect(session.instructions).toContain('do not paste it into a shared chat')
   })
 
   test('manualInput switches the flow to a pasted redirect URL', async () => {
@@ -220,6 +221,7 @@ describe('anthropic login', () => {
     if (manual instanceof Error) throw manual
     expect(manual.method).toBe('code')
     expect(manual.instructions).toContain('paste')
+    expect(manual.instructions).toContain('never a shared chat')
     manual.cancel?.()
   })
 })

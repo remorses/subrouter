@@ -9,7 +9,6 @@
 import * as clack from '@clack/prompts'
 import { colors, goke, isAgent, openInBrowser, type GokeExecutionContext } from 'goke'
 import { createRequire } from 'node:module'
-import path from 'node:path'
 import { z } from 'zod'
 import dedent from 'string-dedent'
 import { adapters, loadModelsDevCatalog, runLogin, validateModelsDevModelIds } from './adapters/index.ts'
@@ -20,6 +19,7 @@ import {
   clearCooldowns,
   cooldownKey,
   isProviderId,
+  loginStatePath,
   loadAccounts,
   loadPresets,
   loadState,
@@ -28,7 +28,7 @@ import {
   removeAccount,
   removePreset,
   savePreset,
-  subrouterHome,
+  type LoginState,
   type ProviderId,
   writeJson,
 } from './store.ts'
@@ -38,22 +38,10 @@ const packageJson = require('../package.json') as { version: string }
 
 export const cli = goke('subrouter')
 
-type LoginState = {
-  provider: ProviderId
-  status: 'pending' | 'error'
-  instructions?: string
-  url?: string
-  error?: string
-}
-
 const CODE_LOGIN_PROVIDERS = new Set<ProviderId>(['opencode', 'minimax', 'kimi', 'zai', 'alibaba'])
 // Must outlive the adapter OAuth wait (30 min) or the daemon kills the callback
 // server before the browser redirect can arrive.
 const LOGIN_TIMEOUT_MS = 35 * 60 * 1000
-
-function loginStatePath(provider: ProviderId) {
-  return path.join(subrouterHome(), `login-${provider}.json`)
-}
 
 function loginDaemonName(provider: ProviderId) {
   return `login ${provider}`
@@ -170,22 +158,18 @@ async function completeLogin({
   background: boolean
   ctx: GokeExecutionContext
 }) {
-  const messages: string[] = []
   return runLogin({
     adapter: adapters[id],
     beginLoginArgs: { method, manualInput: Boolean(input) || undefined },
     log: (message) => {
-      messages.push(message)
       if (!background) ctx.console.error(message)
     },
-    openUrl: async (url) => {
+    openUrl: async (url, session) => {
       if (background) {
         await writeLoginState({
           provider: id,
           status: 'pending',
-          // runLogin logs the authorize URL as its own message; drop it here or
-          // readers that print `instructions` then `url` show it twice.
-          instructions: messages.filter((message) => message !== url).join('\n'),
+          instructions: session.instructions,
           url,
         })
         return
@@ -221,8 +205,9 @@ function loginDescription(id: ProviderId) {
     The browser redirect lands on a localhost callback server owned by this login
     process, and the command prints that callback URL next to the authorize URL.
     If the browser cannot deliver the redirect, replay it by hand while the login
-    is still running: \`curl '<callback-url>?code=...&state=...'\`. Once the login
-    exits, its PKCE verifier is gone and the redirect is worthless.
+    is still running: \`curl '<callback-url>?code=...&state=...'\`. Run curl on the
+    login machine and never paste the redirect URL into a shared chat. Once the
+    login exits, the callback server closes and curl replay stops working.
   `
 }
 
@@ -259,7 +244,6 @@ for (const id of PROVIDER_IDS) {
           fail(ctx, account.message)
         }
         await addAccount({ provider: id, account })
-        await ctx.fs.rm(loginStatePath(id), { force: true })
         return
       }
 
@@ -293,9 +277,6 @@ for (const id of PROVIDER_IDS) {
       const account = await completeLogin({ id, method, input, background: false, ctx })
       if (account instanceof Error) fail(ctx, account.message)
       await addAccount({ provider: id, account })
-      // Drop any error left by an earlier attempt, or `account status` would keep
-      // reporting it after this login succeeded.
-      await ctx.fs.rm(loginStatePath(id), { force: true })
       ctx.console.log(colors.green(`Logged in to ${adapters[id].name} as ${accountLabel(account)}`))
     })
 }
@@ -399,7 +380,8 @@ cli
         if (state.url) ctx.console.error(state.url)
         exit(ctx, 1)
       }
-      fail(ctx, `Login to ${id} stopped before it finished. Run \`subrouter login ${id}\` again.`)
+      await ctx.fs.rm(loginStatePath(id), { force: true })
+      ctx.console.error(colors.yellow(`Login to ${id} stopped before it finished.`))
     }
     if (state?.provider === id && state.status === 'error') {
       fail(ctx, state.error ?? `Login to ${id} failed`)

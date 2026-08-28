@@ -228,7 +228,7 @@ API-key providers accept `--input` in non-interactive shells. Destructive comman
 
 ### Replaying the redirect URL
 
-Browser logins finish on a **localhost callback server** owned by the running login process. When the browser cannot reach that server (a remote box, a chat bot driving the flow, a redirect that landed after you closed the tab), copy the final redirect URL and replay it by hand:
+Browser logins finish on a **localhost callback server** owned by the running login process. Anthropic uses port `53692`, OpenAI uses `1455`, and Poe prints a random port chosen for that login. When the browser cannot reach the server, copy the final redirect URL and replay it on the machine that started the login:
 
 ```bash
 curl 'http://localhost:53692/callback?code=...&state=...'
@@ -236,6 +236,9 @@ curl 'http://localhost:53692/callback?code=...&state=...'
 ```
 
 The server accepts any `GET`, so this is the same request the browser would have made.
+
+> [!IMPORTANT]
+> The redirect URL contains a **one-time credential**. Run the curl command on the machine that started the login. Do not paste the URL into a shared chat or issue.
 
 ```diagram
 subrouter login anthropic
@@ -245,7 +248,7 @@ subrouter login anthropic
         └──> 30 min timeout ──> server closes ──> replay gets connection refused
 ```
 
-The window is **30 minutes**. After that the PKCE verifier is gone with the process, so run `login` again. If the browser lives on a different machine entirely, set `SUBROUTER_MANUAL_OAUTH=1` and pass the redirect URL to `--input` instead.
+The window is **30 minutes**. After that the callback server closes and curl replay stops working, so run `login` again. In an interactive terminal with the browser on another machine, set `SUBROUTER_MANUAL_OAUTH=1`; Subrouter prints the authorize URL, then asks for the final redirect URL.
 
 The `default` preset is built in. It uses the newest model from each provider in the order shown above, filtered to subscriptions with stored accounts. Create a preset named `default` to override it.
 

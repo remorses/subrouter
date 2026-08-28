@@ -324,7 +324,7 @@ async function beginBrowserLogin(args?: BeginLoginArgs): Promise<Error | LoginSe
       issuer,
     }),
     instructions: args?.manualInput
-      ? 'Authorize ChatGPT in your browser, then paste the final localhost redirect URL.'
+      ? 'Authorize ChatGPT in your browser, then paste the final localhost redirect URL into this prompt, never a shared chat.'
       : callbackLoginInstructions({ subscription: 'ChatGPT', redirectUri }),
     method: args?.manualInput ? 'code' : 'auto',
     complete(input) {
