@@ -63,6 +63,8 @@ export const DEFAULT_PROVIDER_ORDER: ProviderId[] = [
   'alibaba',
 ]
 export const DEFAULT_PRESET_NAME = 'default'
+export const PROVIDER_ID = 'subrouter'
+export const PROVIDER_DISPLAY_NAME = 'subrouter.org'
 
 /** Builtin default preset: newest model of each provider, ranked. */
 export function builtinDefaultPreset() {
@@ -137,6 +139,17 @@ export async function resolveCandidates({
   return { candidates, skipped }
 }
 
+export function formatCandidateRef(candidate: Pick<Candidate, 'provider' | 'modelId'>) {
+  return `${candidate.provider}/${candidate.modelId}`
+}
+
+export async function resolveActiveCandidate(preset: string) {
+  const presetModels = await resolvePresetModels(preset)
+  if (presetModels instanceof Error) return null
+  const { candidates } = await resolveCandidates({ presetModels })
+  return candidates[0] ?? null
+}
+
 export type RouterEvent =
   | { type: 'trying'; candidate: Candidate }
   | { type: 'failover'; candidate: Candidate; error: Error; cooldownMs: number }
@@ -151,7 +164,7 @@ export type RouterModelArgs = {
 
 export class RouterModel implements LanguageModelV3 {
   readonly specificationVersion = 'v3' as const
-  readonly provider = 'subrouter'
+  readonly provider = PROVIDER_ID
   readonly modelId: string
   readonly supportedUrls: Record<string, RegExp[]> = {}
   private onEvent?: (event: RouterEvent) => void

@@ -23,11 +23,15 @@ import {
   AllCandidatesExhaustedError,
   classifyFailure,
   DEFAULT_PRESET_NAME,
+  formatCandidateRef,
   isProviderId,
   loadAccounts,
   loadPresets,
   markCooldown,
   NoUsableAccountError,
+  PROVIDER_DISPLAY_NAME,
+  PROVIDER_ID,
+  resolveActiveCandidate,
   resolveCandidates,
   resolvePresetModels,
   updateAccount,
@@ -211,9 +215,9 @@ function presetModel({
   const supportsImages = targets.length > 0 && targets.every((model) => model.input.includes('image'))
   return {
     id: preset,
-    name: `subrouter ${preset}`,
+    name: preset,
     api: 'subrouter',
-    provider: 'subrouter',
+    provider: PROVIDER_ID,
     baseUrl: 'subrouter://local',
     reasoning: targets.length > 0 && targets.every((model) => model.reasoning),
     input: supportsImages ? ['text', 'image'] : ['text'],
@@ -338,6 +342,7 @@ function streamPreset({
         }
         if (!committed) {
           committed = true
+          model.name = formatCandidateRef(candidate)
           if (start) stream.push(start)
         }
         stream.push(event)
@@ -410,15 +415,20 @@ async function createSubrouterProvider() {
     modelIds: [...customModelIds.alibaba],
   })
   providers.set(alibaba.id, alibaba)
-  const models = resolved.map(({ preset, entries }) => {
-    return presetModel({ preset, entries: entries instanceof Error ? [] : entries, providers })
-  })
+  const models = await Promise.all(
+    resolved.map(async ({ preset, entries }) => {
+      const model = presetModel({ preset, entries: entries instanceof Error ? [] : entries, providers })
+      const candidate = await resolveActiveCandidate(preset)
+      if (candidate) model.name = formatCandidateRef(candidate)
+      return model
+    }),
+  )
   return {
-    id: 'subrouter',
-    name: 'Subrouter',
+    id: PROVIDER_ID,
+    name: PROVIDER_DISPLAY_NAME,
     auth: {
       apiKey: {
-        name: 'Subrouter accounts',
+        name: `${PROVIDER_DISPLAY_NAME} accounts`,
         async check() {
           const accounts = await loadAccounts()
           const configured = Object.values(accounts.providers).some((pool) => pool.accounts.length > 0)

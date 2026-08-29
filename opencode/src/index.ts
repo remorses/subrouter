@@ -5,7 +5,9 @@
  * provider whose npm field points at this package's provider module (file://
  * URL, so opencode never installs anything). Each subrouter preset becomes a
  * model: pick `subrouter/default` (or any preset created with
- * `subrouter preset create`) in opencode.
+ * `subrouter preset create`) in opencode. Provider id stays `subrouter`; the
+ * visible name is `subrouter.org`. Model names and the system identity use the
+ * live routed candidate, not the preset id.
  *
  * `subrouterAuthPlugin` registers the login flow, so `opencode auth login`
  * (and any harness driving opencode's auth hook, like kimaki's Discord
@@ -21,12 +23,16 @@ import {
   adapters,
   addAccount,
   DEFAULT_PRESET_NAME,
+  formatCandidateRef,
   isProviderId,
   loadPresets,
+  PROVIDER_DISPLAY_NAME,
+  PROVIDER_ID,
   PROVIDER_IDS,
+  resolveActiveCandidate,
   type StoredAccount,
 } from '@subrouter/cli'
-import { addSubrouterHeaders } from './provider.ts'
+import { addSubrouterHeaders, revealRoutedModel } from './provider.ts'
 
 function providerEntryUrl() {
   const isDev = import.meta.url.endsWith('.ts')
@@ -41,28 +47,33 @@ export const subrouterPlugin: Plugin = async () => {
       })
       const names = new Set([DEFAULT_PRESET_NAME, ...Object.keys(presets.presets)])
       const models = Object.fromEntries(
-        [...names].map((name) => [
-          name,
-          {
-            name: `subrouter ${name}`,
-            tool_call: true,
-            attachment: true,
-            reasoning: false,
-            modalities: {
-              input: ['text', 'image', 'pdf'] satisfies Array<
-                'text' | 'image' | 'pdf'
-              >,
-              output: ['text'] satisfies Array<'text'>,
-            },
-            cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-            limit: { context: 200_000, output: 64_000 },
-          },
-        ]),
+        await Promise.all(
+          [...names].map(async (name) => {
+            const candidate = await resolveActiveCandidate(name)
+            return [
+              name,
+              {
+                name: candidate ? formatCandidateRef(candidate) : name,
+                tool_call: true,
+                attachment: true,
+                reasoning: false,
+                modalities: {
+                  input: ['text', 'image', 'pdf'] satisfies Array<
+                    'text' | 'image' | 'pdf'
+                  >,
+                  output: ['text'] satisfies Array<'text'>,
+                },
+                cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+                limit: { context: 200_000, output: 64_000 },
+              },
+            ]
+          }),
+        ),
       )
       config.provider = {
         ...config.provider,
-        subrouter: {
-          name: 'Subrouter',
+        [PROVIDER_ID]: {
+          name: PROVIDER_DISPLAY_NAME,
           npm: providerEntryUrl(),
           models,
           options: {},
@@ -70,6 +81,14 @@ export const subrouterPlugin: Plugin = async () => {
       }
     },
     'chat.headers': async (input, output) => addSubrouterHeaders(input, output),
+    // OpenCode identity uses the preset id; rewrite it to the live routed model.
+    'experimental.chat.system.transform': async (input, output) => {
+      await revealRoutedModel({
+        providerID: input.model.providerID,
+        preset: input.model.id,
+        system: output.system,
+      })
+    },
   }
 }
 
@@ -94,7 +113,7 @@ function toOpencodeCredentials(account: StoredAccount) {
 export const subrouterAuthPlugin: Plugin = async () => {
   return {
     auth: {
-      provider: 'subrouter',
+      provider: PROVIDER_ID,
       methods: [
         {
           type: 'oauth',

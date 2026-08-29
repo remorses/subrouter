@@ -357,6 +357,8 @@ describe.sequential('@subrouter/pi', () => {
       },
     })
     expect(services.diagnostics).toEqual([])
+    const provider = services.modelRuntime.getProvider('subrouter')
+    expect(provider?.name).toBe('subrouter.org')
     const model = (await services.modelRuntime.getAvailable('subrouter')).find((entry) => entry.id === preset)
     expect(model).toBeTruthy()
     if (!model) throw new Error(`Missing subrouter/${preset}`)

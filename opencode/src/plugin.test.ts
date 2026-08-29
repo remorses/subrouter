@@ -4,8 +4,9 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
-import { loadAccounts, PROVIDER_IDS } from '@subrouter/cli'
+import { addAccount, adapters, loadAccounts, PROVIDER_DISPLAY_NAME, PROVIDER_IDS } from '@subrouter/cli'
 import { subrouterAuthPlugin, subrouterPlugin } from './index.ts'
+import { revealRoutedModel, rewritePoweredByModelLine } from './provider.ts'
 
 let home: string
 const openServers: Server[] = []
@@ -85,10 +86,39 @@ test('config hook registers the subrouter provider with preset models', async ()
 
   const provider = config.provider?.subrouter
   expect(provider).toBeTruthy()
+  expect(provider.name).toBe(PROVIDER_DISPLAY_NAME)
   expect(provider.npm.startsWith('file://')).toBe(true)
   expect(provider.npm.endsWith('provider.ts') || provider.npm.endsWith('provider.js')).toBe(true)
   expect(Object.keys(provider.models).sort()).toEqual(['default', 'work'])
+  expect(provider.models.default.name).toBe('default')
+  expect(provider.models.work.name).toBe('work')
   expect(provider.models.default.cost).toEqual({ input: 0, output: 0, cache_read: 0, cache_write: 0 })
+})
+
+test('preset model names show the first live candidate', async () => {
+  await addAccount({
+    provider: 'anthropic',
+    account: {
+      type: 'oauth',
+      refresh: 'refresh-1',
+      access: 'access-1',
+      expires: Date.now() + 60_000,
+      email: 'a@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await writeFile(
+    path.join(home, 'presets.json'),
+    JSON.stringify({ version: 1, presets: { work: ['anthropic/claude-opus-4-6'] } }),
+  )
+
+  const hooks = await subrouterPlugin(pluginInput)
+  const config: Config = {}
+  await hooks.config?.(config)
+
+  expect(config.provider?.subrouter?.name).toBe(PROVIDER_DISPLAY_NAME)
+  expect(config.provider?.subrouter?.models?.work?.name).toBe('anthropic/claude-opus-4-6')
 })
 
 test('preset models permit image and PDF attachments', async () => {
@@ -103,6 +133,52 @@ test('preset models permit image and PDF attachments', async () => {
       output: ['text'],
     },
   })
+})
+
+test('rewrites the OpenCode powered-by line to the routed candidate', () => {
+  const system = [
+    'You are powered by the model named build. The exact model ID is subrouter/build\n<env>\n  Working directory: /tmp\n</env>',
+  ]
+  rewritePoweredByModelLine({
+    system,
+    candidate: { provider: 'anthropic', modelId: 'claude-opus-4-6' },
+  })
+  expect(system[0]).toContain('You are powered by the model named claude-opus-4-6.')
+  expect(system[0]).toContain('The exact model ID is anthropic/claude-opus-4-6')
+  expect(system[0]).not.toContain('subrouter/build')
+})
+
+test('system transform rewrites the powered-by line to the live candidate', async () => {
+  await addAccount({
+    provider: 'anthropic',
+    account: {
+      type: 'oauth',
+      refresh: 'refresh-1',
+      access: 'access-1',
+      expires: Date.now() + 60_000,
+      email: 'a@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+
+  const system = [
+    'You are powered by the model named build. The exact model ID is subrouter/build\n<env>\n  Working directory: /tmp\n</env>',
+  ]
+  await revealRoutedModel({ providerID: 'subrouter', preset: 'default', system })
+
+  const modelId = adapters.anthropic.defaultModels[0]
+  expect(system[0]).toContain(`You are powered by the model named ${modelId}.`)
+  expect(system[0]).toContain(`The exact model ID is anthropic/${modelId}`)
+  expect(system[0]).not.toContain('subrouter/build')
+})
+
+test('system transform leaves other providers unchanged', async () => {
+  const original =
+    'You are powered by the model named claude-opus-4-6. The exact model ID is anthropic/claude-opus-4-6'
+  const system = [original]
+  await revealRoutedModel({ providerID: 'anthropic', preset: 'claude-opus-4-6', system })
+  expect(system[0]).toBe(original)
 })
 
 test('auth hook asks which subscription to add before authorizing', async () => {

@@ -11,8 +11,14 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import type { LanguageModelV3CallOptions } from '@ai-sdk/provider'
-import { AllCandidatesExhaustedError, NoUsableAccountError, resolveCandidates, RouterModel } from './router.ts'
-import { addAccount, loadState, savePreset, type StoredAccount } from './store.ts'
+import {
+  AllCandidatesExhaustedError,
+  NoUsableAccountError,
+  resolveActiveCandidate,
+  resolveCandidates,
+  RouterModel,
+} from './router.ts'
+import { addAccount, loadState, markCooldown, savePreset, type StoredAccount } from './store.ts'
 
 type MockResponse = { status: number; headers?: Record<string, string>; body: string }
 
@@ -246,6 +252,35 @@ describe('RouterModel failover', () => {
     // Next call fails fast: everything is cooling down
     const second = await model.doGenerate(callOptions).catch((error: Error) => error)
     expect(NoUsableAccountError.is(second)).toBe(true)
+  })
+
+  test('resolveActiveCandidate returns the first usable account', async () => {
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    const active = await resolveActiveCandidate('test')
+    expect(active).toMatchObject({ provider: 'anthropic', modelId: 'claude-fake' })
+  })
+
+  test('resolveActiveCandidate skips cooled-down accounts', async () => {
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+    await markCooldown({
+      provider: 'anthropic',
+      account: oauthAccount({ email: 'a@x.com' }),
+      untilMs: Date.now() + 60_000,
+    })
+
+    const active = await resolveActiveCandidate('test')
+    expect(active).toMatchObject({ provider: 'opencode-go', modelId: 'fake-model' })
   })
 
   test('missing preset throws PresetNotFoundError', async () => {
