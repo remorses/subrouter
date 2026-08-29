@@ -168,7 +168,7 @@ This narrow scope keeps **Subrouter much smaller and simpler**. It does not need
 | `anthropic`      | Claude Pro / Max                   | OAuth (browser, PKCE)               |
 | `openai`         | ChatGPT Plus / Pro (Codex backend) | Browser OAuth (PKCE) or device code |
 | `xai`            | SuperGrok / Grok Build             | Device code                         |
-| `opencode-go`    | opencode Go                        | API key from console.opencode.ai    |
+| `opencode-go`    | opencode Go                        | API key from opencode.ai/auth       |
 | `github-copilot` | GitHub Copilot                     | GitHub device code                  |
 | `poe`            | Poe subscription points            | Browser OAuth (PKCE)                |
 | `minimax`        | MiniMax Token Plan                 | Subscription key                    |

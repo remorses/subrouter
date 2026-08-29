@@ -5,7 +5,7 @@
  * models.dev id is `opencode-go`. Do not use `opencode` / zen/v1: that is Zen
  * pay-as-you-go, a different product with a different catalog.
  *
- * Login stores an API key from console.opencode.ai. Requests inject it as a
+ * Login stores an API key from https://opencode.ai/auth. Requests inject it as a
  * bearer token.
  */
 
@@ -21,9 +21,9 @@ export class OpencodeGoAuthError extends errore.createTaggedError({
 
 async function beginLogin(): Promise<Error | LoginSession> {
   return {
-    url: 'https://console.opencode.ai',
+    url: 'https://opencode.ai/auth',
     instructions:
-      'Copy your API key from console.opencode.ai (OpenCode Go subscription), then paste it back here.',
+      'Copy your API key from https://opencode.ai/auth (OpenCode Go subscription), then paste it back here.',
     method: 'code',
     async complete(input) {
       const key = input?.trim()

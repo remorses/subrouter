@@ -39,6 +39,10 @@ const packageJson = require('../package.json') as { version: string }
 export const cli = goke('subrouter')
 
 const CODE_LOGIN_PROVIDERS = new Set<ProviderId>(['opencode-go', 'minimax', 'kimi', 'zai', 'alibaba'])
+
+function shouldOpenLoginBrowser(id: ProviderId) {
+  return !CODE_LOGIN_PROVIDERS.has(id)
+}
 // Must outlive the adapter OAuth wait (30 min) or the daemon kills the callback
 // server before the browser redirect can arrive.
 const LOGIN_TIMEOUT_MS = 35 * 60 * 1000
@@ -174,7 +178,7 @@ async function completeLogin({
         })
         return
       }
-      if (process.stdin.isTTY) await openInBrowser(url)
+      if (shouldOpenLoginBrowser(id) && process.stdin.isTTY) await openInBrowser(url)
     },
     promptManualInput: input
       ? async () => input
@@ -266,7 +270,7 @@ for (const id of PROVIDER_IDS) {
         // reading a chat window has no other way to reach it.
         if (state.url) {
           ctx.console.error(state.url)
-          if (process.stdin.isTTY) await openInBrowser(state.url)
+          if (shouldOpenLoginBrowser(id) && process.stdin.isTTY) await openInBrowser(state.url)
         }
         ctx.console.log(
           `Login running in background. After approving, verify with: subrouter account status ${id}`,

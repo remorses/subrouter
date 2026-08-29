@@ -124,6 +124,7 @@ describe('opencode go login', () => {
     if (session instanceof Error) throw session
 
     expect(session.method).toBe('code')
+    expect(session.url).toBe('https://opencode.ai/auth')
     const account = await session.complete('  go-key-1  ')
     expect(account).toMatchObject({ type: 'api', key: 'go-key-1' })
   })

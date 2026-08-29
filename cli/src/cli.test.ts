@@ -198,4 +198,14 @@ describe('account status', () => {
       { type: 'api', key: 'subscription-key' },
     ])
   })
+
+  test('prints the OpenCode Go key page instead of starting a browser login', async () => {
+    const result = await runCli('login', 'opencode-go', '--input', 'go-key-1')
+
+    expect(result.code).toBe(0)
+    expect(result.stderr).toContain('https://opencode.ai/auth')
+    expect((await loadAccounts()).providers['opencode-go']?.accounts).toMatchObject([
+      { type: 'api', key: 'go-key-1' },
+    ])
+  })
 })
