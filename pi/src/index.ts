@@ -39,7 +39,7 @@ const PI_PROVIDER_IDS: Record<ProviderId, string> = {
   anthropic: 'anthropic',
   openai: 'openai-codex',
   xai: 'xai',
-  opencode: 'opencode',
+  'opencode-go': 'opencode-go',
   'github-copilot': 'github-copilot',
   poe: 'poe',
   minimax: 'minimax',
@@ -372,18 +372,28 @@ async function createSubrouterProvider() {
   const customModelIds = {
     poe: new Set(adapters.poe.defaultModels),
     alibaba: new Set(adapters.alibaba.defaultModels),
+    'opencode-go': new Set(adapters['opencode-go'].defaultModels),
   }
   for (const item of resolved) {
     if (item.entries instanceof Error) continue
     for (const entry of item.entries) {
       const parsed = parsePresetEntry(entry)
-      if (parsed?.provider === 'poe' || parsed?.provider === 'alibaba') {
+      if (parsed?.provider === 'poe' || parsed?.provider === 'alibaba' || parsed?.provider === 'opencode-go') {
         customModelIds[parsed.provider].add(parsed.modelId)
       }
     }
   }
   const providers = new Map(builtinProviders().map((provider) => [provider.id, provider]))
   providers.set('zai', createZaiProvider(providers.get('zai')))
+  const opencodeGo = createOpenAICompatibleProvider({
+    id: 'opencode-go',
+    name: 'OpenCode Go',
+    baseUrl:
+      process.env.SUBROUTER_OPENCODE_GO_BASE_URL?.replace(/\/+$/, '') || 'https://opencode.ai/zen/go/v1',
+    envVar: 'OPENCODE_API_KEY',
+    modelIds: [...customModelIds['opencode-go']],
+  })
+  providers.set(opencodeGo.id, opencodeGo)
   const poe = createOpenAICompatibleProvider({
     id: 'poe',
     name: 'Poe',

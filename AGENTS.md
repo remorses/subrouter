@@ -16,7 +16,7 @@ subrouter must **never translate between AI wire formats**. This is the main rob
 - Adapters only touch requests where the subscription gateway **requires** it, and any rewrite must be reversed on the way out:
   - anthropic: OAuth traffic must look like Claude Code CLI (identity system block, tool-name renames, beta headers). The response stream maps tool names **back** to the originals, so the harness never sees the spoofing.
   - openai (Codex backend): `store: false` forced, `max_output_tokens` stripped, URL rewritten to `chatgpt.com/backend-api/codex/responses`. These are hard endpoint requirements (verified against the real API), not conveniences. Codex is stream-only.
-  - xai / opencode zen / poe / minimax / kimi / zai / alibaba: bearer injection only.
+  - xai / opencode-go / poe / minimax / kimi / zai / alibaba: bearer injection only.
   - github-copilot: bearer injection, API-family routing, and removal of the unsupported Anthropic tool-streaming field.
 - The Pi plugin does not use these AI SDK request adapters. It supplies the selected account token to Pi's matching native provider, which owns the required request shape and returns native Pi events.
 - Never add "smart" body transformations, prompt mutation, output post-processing, or cross-format proxying (no anthropic→openai translation like generic LLM proxies do). If a provider needs a new quirk, implement the **minimal** request patch in that provider's adapter fetch, document why, and keep everything else byte-transparent.

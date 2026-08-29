@@ -72,7 +72,7 @@ describe('models.dev validation', () => {
       },
     },
     xai: emptyProvider,
-    opencode: emptyProvider,
+    'opencode-go': emptyProvider,
     'github-copilot': emptyProvider,
     poe: emptyProvider,
     'minimax-coding-plan': emptyProvider,
@@ -112,6 +112,22 @@ describe('models.dev validation', () => {
         [InvalidModelError: Model openai/ is not available as a text-output language model in models.dev],
       ]
     `)
+  })
+
+  test('accepts opencode-go text models', () => {
+    const catalog = parseModelsDevCatalog({
+      ...payload,
+      'opencode-go': {
+        models: {
+          'glm-5.3-flash': { id: 'glm-5.3-flash', modalities: { output: ['text'] } },
+        },
+      },
+    })
+    expect(catalog).not.toBeInstanceOf(Error)
+    if (catalog instanceof Error) return
+    expect(
+      validateModelsDevModelIds({ entries: ['opencode-go/glm-5.3-flash'], catalog }),
+    ).toBeNull()
   })
 
   test('rejects malformed model records clearly', () => {
@@ -240,7 +256,7 @@ describe.skipIf(!process.env.TEST_MODELS_DEV)('models.dev validation', () => {
           'anthropic/claude-opus-4-6',
           'openai/gpt-5.5',
           'xai/grok-4.6',
-          'opencode/grok-4.6',
+          'opencode-go/glm-5.3-flash',
           'minimax/MiniMax-M3',
           'kimi/k3',
           'zai/glm-5.3',

@@ -147,26 +147,26 @@ test('authorize dispatches to the chosen adapter and the callback pools the acco
   ])
 })
 
-test('opencode zen asks for a pasted key and stores it as an api account', async () => {
+test('opencode go asks for a pasted key and stores it as an api account', async () => {
   const { method } = await authMethod()
 
-  const result = await method.authorize({ provider: 'opencode' })
+  const result = await method.authorize({ provider: 'opencode-go' })
   expect(result.method).toBe('code')
 
   if (result.method !== 'code') throw new Error('expected a pasted-key flow')
-  expect(await result.callback('zen-key-1')).toMatchObject({ type: 'success', key: 'zen-key-1' })
+  expect(await result.callback('go-key-1')).toMatchObject({ type: 'success', key: 'go-key-1' })
 
   const accounts = await loadAccounts()
-  expect(accounts.providers.opencode?.accounts).toMatchObject([{ type: 'api', key: 'zen-key-1' }])
+  expect(accounts.providers['opencode-go']?.accounts).toMatchObject([{ type: 'api', key: 'go-key-1' }])
 })
 
 test('a failed login reports failure instead of pooling a broken account', async () => {
   const { method } = await authMethod()
 
-  const result = await method.authorize({ provider: 'opencode' })
+  const result = await method.authorize({ provider: 'opencode-go' })
   if (result.method !== 'code') throw new Error('expected a pasted-key flow')
 
   expect(await result.callback('   ')).toEqual({ type: 'failed' })
   const accounts = await loadAccounts()
-  expect(accounts.providers.opencode).toBeUndefined()
+  expect(accounts.providers['opencode-go']).toBeUndefined()
 })

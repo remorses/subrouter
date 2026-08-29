@@ -2,7 +2,7 @@
  * End-to-end test: a real opencode server drives the subrouter provider.
  *
  * No real API requests. Fake HTTP servers play the provider endpoints:
- * anthropic always answers 429 (rate limited), the opencode zen mock streams
+ * anthropic always answers 429 (rate limited), the opencode-go mock streams
  * a canned completion. The test prompts opencode with model subrouter/default
  * and asserts the reply came from the fallback provider, proving the cycling
  * works through the whole opencode -> provider -> router pipeline.
@@ -86,7 +86,7 @@ beforeAll(async () => {
     res.end(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'rate limited' } }))
   })
 
-  // Fake opencode zen: streams a canned completion
+  // Fake opencode-go: streams a canned completion
   zenMock = await startMockServer(({ body }, res) => {
     const streaming = body.includes('"stream":true')
     if (!streaming) {
@@ -153,7 +153,7 @@ beforeAll(async () => {
             },
           ],
         },
-        opencode: {
+        'opencode-go': {
           activeIndex: 0,
           accounts: [{ type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 }],
         },
@@ -164,7 +164,7 @@ beforeAll(async () => {
   for (const [key, value] of Object.entries({
     SUBROUTER_HOME: subrouterHome,
     SUBROUTER_ANTHROPIC_BASE_URL: `${anthropicMock.url}/v1`,
-    SUBROUTER_OPENCODE_BASE_URL: `${zenMock.url}/v1`,
+    SUBROUTER_OPENCODE_GO_BASE_URL: `${zenMock.url}/v1`,
     // Isolate opencode from the user's real global config and auth
     XDG_CONFIG_HOME: path.join(home, 'xdg-config'),
     XDG_DATA_HOME: path.join(home, 'xdg-data'),

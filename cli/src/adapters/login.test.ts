@@ -10,7 +10,7 @@ import { afterEach, describe, expect, test } from 'vitest'
 import { anthropicAdapter } from './anthropic.ts'
 import { alibabaAdapter, kimiAdapter, minimaxAdapter, zaiAdapter } from './coding-plans.ts'
 import { openaiAdapter } from './openai.ts'
-import { opencodeAdapter } from './opencode.ts'
+import { opencodeGoAdapter } from './opencode-go.ts'
 import { poeAdapter } from './poe.ts'
 
 /** Same regex harnesses use to pull a device code out of `instructions`. */
@@ -118,18 +118,18 @@ describe('openai device flow', () => {
   })
 })
 
-describe('opencode zen login', () => {
+describe('opencode go login', () => {
   test('asks for a pasted key and trims it', async () => {
-    const session = await opencodeAdapter.beginLogin()
+    const session = await opencodeGoAdapter.beginLogin()
     if (session instanceof Error) throw session
 
     expect(session.method).toBe('code')
-    const account = await session.complete('  zen-key-1  ')
-    expect(account).toMatchObject({ type: 'api', key: 'zen-key-1' })
+    const account = await session.complete('  go-key-1  ')
+    expect(account).toMatchObject({ type: 'api', key: 'go-key-1' })
   })
 
   test('rejects an empty key instead of storing a blank account', async () => {
-    const session = await opencodeAdapter.beginLogin()
+    const session = await opencodeGoAdapter.beginLogin()
     if (session instanceof Error) throw session
 
     expect(await session.complete()).toBeInstanceOf(Error)

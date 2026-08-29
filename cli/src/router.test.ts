@@ -1,6 +1,6 @@
 /**
  * Router failover tests with fake provider HTTP servers. No real API calls:
- * the anthropic mock returns rate-limit errors, the opencode (OpenAI
+ * the anthropic mock returns rate-limit errors, the opencode-go (OpenAI
  * compatible) mock returns canned completions, and we assert the router
  * cycles accounts and providers in order, recording cooldowns.
  */
@@ -117,7 +117,7 @@ beforeEach(async () => {
 afterEach(async () => {
   delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_ANTHROPIC_BASE_URL
-  delete process.env.SUBROUTER_OPENCODE_BASE_URL
+  delete process.env.SUBROUTER_OPENCODE_GO_BASE_URL
   for (const server of servers) await server.close()
   servers = []
   await rm(home, { recursive: true, force: true })
@@ -129,15 +129,15 @@ describe('RouterModel failover', () => {
     const opencodeMock = await startMockServer(() => chatCompletionOk('hello from fallback'))
     servers = [anthropicMock, opencodeMock]
     process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
-    process.env.SUBROUTER_OPENCODE_BASE_URL = `${opencodeMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
 
     await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com', refresh: 'r1', access: 'acc1' }) })
     await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'b@x.com', refresh: 'r2', access: 'acc2' }) })
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
     })
-    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode/fake-model'] })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
 
     const events: string[] = []
     const model = new RouterModel({
@@ -151,14 +151,14 @@ describe('RouterModel failover', () => {
     const texts = result.content.filter((part) => part.type === 'text').map((part) => part.text)
     expect(texts).toEqual(['hello from fallback'])
 
-    // Both anthropic accounts were tried, then opencode
+    // Both anthropic accounts were tried, then opencode-go
     expect(events).toMatchInlineSnapshot(`
       [
         "trying anthropic",
         "failover anthropic",
         "trying anthropic",
         "failover anthropic",
-        "trying opencode",
+        "trying opencode-go",
       ]
     `)
     expect(anthropicMock.requests.length).toBe(2)
@@ -175,28 +175,28 @@ describe('RouterModel failover', () => {
     const opencodeMock = await startMockServer(() => chatCompletionOk('again'))
     servers = [anthropicMock, opencodeMock]
     process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
-    process.env.SUBROUTER_OPENCODE_BASE_URL = `${opencodeMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
 
     await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
     })
-    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode/fake-model'] })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
 
     const model = new RouterModel({ preset: 'test' })
     await model.doGenerate(callOptions)
     expect(anthropicMock.requests.length).toBe(1)
 
-    // Second call: anthropic is in cooldown, request goes straight to opencode
+    // Second call: anthropic is in cooldown, request goes straight to opencode-go
     await model.doGenerate(callOptions)
     expect(anthropicMock.requests.length).toBe(1)
     expect(opencodeMock.requests.length).toBe(2)
 
     const { candidates, skipped } = await resolveCandidates({
-      presetModels: ['anthropic/claude-fake', 'opencode/fake-model'],
+      presetModels: ['anthropic/claude-fake', 'opencode-go/fake-model'],
     })
-    expect(candidates.map((c) => c.provider)).toEqual(['opencode'])
+    expect(candidates.map((c) => c.provider)).toEqual(['opencode-go'])
     expect(skipped.length).toBe(1)
   })
 
@@ -205,14 +205,14 @@ describe('RouterModel failover', () => {
     const opencodeMock = await startMockServer(() => chatCompletionOk('should not be reached'))
     servers = [anthropicMock, opencodeMock]
     process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
-    process.env.SUBROUTER_OPENCODE_BASE_URL = `${opencodeMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
 
     await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
     })
-    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode/fake-model'] })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
 
     const model = new RouterModel({ preset: 'test' })
     const result = await model.doGenerate(callOptions).catch((error: Error) => error)
@@ -230,14 +230,14 @@ describe('RouterModel failover', () => {
     }))
     servers = [anthropicMock, opencodeMock]
     process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
-    process.env.SUBROUTER_OPENCODE_BASE_URL = `${opencodeMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
 
     await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
     })
-    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode/fake-model'] })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
 
     const model = new RouterModel({ preset: 'test' })
     const result = await model.doGenerate(callOptions).catch((error: Error) => error)

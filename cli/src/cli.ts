@@ -38,7 +38,7 @@ const packageJson = require('../package.json') as { version: string }
 
 export const cli = goke('subrouter')
 
-const CODE_LOGIN_PROVIDERS = new Set<ProviderId>(['opencode', 'minimax', 'kimi', 'zai', 'alibaba'])
+const CODE_LOGIN_PROVIDERS = new Set<ProviderId>(['opencode-go', 'minimax', 'kimi', 'zai', 'alibaba'])
 // Must outlive the adapter OAuth wait (30 min) or the daemon kills the callback
 // server before the browser redirect can arrive.
 const LOGIN_TIMEOUT_MS = 35 * 60 * 1000

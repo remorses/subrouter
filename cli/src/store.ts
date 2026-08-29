@@ -18,7 +18,7 @@ export const PROVIDER_IDS = [
   'anthropic',
   'openai',
   'xai',
-  'opencode',
+  'opencode-go',
   'github-copilot',
   'poe',
   'minimax',

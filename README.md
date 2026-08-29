@@ -26,7 +26,7 @@ Run only the login commands for subscriptions you have. **One subscription is en
 npx @subrouter/cli login anthropic
 npx @subrouter/cli login openai
 npx @subrouter/cli login xai
-npx @subrouter/cli login opencode
+npx @subrouter/cli login opencode-go
 npx @subrouter/cli login github-copilot
 npx @subrouter/cli login poe
 npx @subrouter/cli login minimax
@@ -93,7 +93,7 @@ A preset is an ordered list of `provider/model` candidates. Subrouter walks that
                            v
               for each candidate in order
               (default preset: 1.anthropic
-               2.openai 3.xai 4.opencode
+                2.openai 3.xai 4.opencode-go
                5.github-copilot 6.poe 7.minimax
                8.kimi 9.zai 10.alibaba)
                            │
@@ -168,7 +168,7 @@ This narrow scope keeps **Subrouter much smaller and simpler**. It does not need
 | `anthropic`      | Claude Pro / Max                   | OAuth (browser, PKCE)               |
 | `openai`         | ChatGPT Plus / Pro (Codex backend) | Browser OAuth (PKCE) or device code |
 | `xai`            | SuperGrok / Grok Build             | Device code                         |
-| `opencode`       | opencode Go                        | API key from console.opencode.ai    |
+| `opencode-go`    | opencode Go                        | API key from console.opencode.ai    |
 | `github-copilot` | GitHub Copilot                     | GitHub device code                  |
 | `poe`            | Poe subscription points            | Browser OAuth (PKCE)                |
 | `minimax`        | MiniMax Token Plan                 | Subscription key                    |
@@ -326,7 +326,7 @@ The e2e tests boot real opencode Go and Pi harness runtimes, point every adapter
 | `SUBROUTER_OPENAI_BASE_URL`               | Override the Codex API base URL (tests)                  |
 | `SUBROUTER_OPENAI_ISSUER_URL`             | Override the OpenAI auth host (tests)                    |
 | `SUBROUTER_XAI_BASE_URL`                  | Override the xAI API base URL (tests)                    |
-| `SUBROUTER_OPENCODE_BASE_URL`             | Override the opencode Go base URL (tests)                |
+| `SUBROUTER_OPENCODE_GO_BASE_URL`          | Override the OpenCode Go base URL (tests)                |
 | `SUBROUTER_GITHUB_COPILOT_BASE_URL`       | Override the GitHub Copilot API base URL (tests)         |
 | `SUBROUTER_GITHUB_COPILOT_GITHUB_URL`     | Override the GitHub OAuth host (tests)                   |
 | `SUBROUTER_GITHUB_COPILOT_GITHUB_API_URL` | Override the GitHub API host (tests)                     |

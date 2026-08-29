@@ -20,7 +20,7 @@ export {
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
 } from './openai.ts'
-import { opencodeAdapter } from './opencode.ts'
+import { opencodeGoAdapter } from './opencode-go.ts'
 import { poeAdapter } from './poe.ts'
 import { xaiAdapter } from './xai.ts'
 
@@ -123,7 +123,7 @@ export const adapters: Record<ProviderId, ProviderAdapter> = {
   anthropic: anthropicAdapter,
   openai: openaiAdapter,
   xai: xaiAdapter,
-  opencode: opencodeAdapter,
+  'opencode-go': opencodeGoAdapter,
   'github-copilot': githubCopilotAdapter,
   poe: poeAdapter,
   minimax: minimaxAdapter,
@@ -167,7 +167,7 @@ const modelsDevCatalogSchema = z
     anthropic: modelsDevProviderSchema,
     openai: modelsDevProviderSchema,
     xai: modelsDevProviderSchema,
-    opencode: modelsDevProviderSchema,
+    'opencode-go': modelsDevProviderSchema,
     'github-copilot': modelsDevProviderSchema,
     poe: modelsDevProviderSchema,
     'minimax-coding-plan': modelsDevProviderSchema,
@@ -179,7 +179,7 @@ const modelsDevCatalogSchema = z
     anthropic: catalog.anthropic,
     openai: catalog.openai,
     xai: catalog.xai,
-    opencode: catalog.opencode,
+    'opencode-go': catalog['opencode-go'],
     'github-copilot': catalog['github-copilot'],
     poe: catalog.poe,
     minimax: catalog['minimax-coding-plan'],

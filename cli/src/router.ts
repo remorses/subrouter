@@ -54,7 +54,7 @@ export const DEFAULT_PROVIDER_ORDER: ProviderId[] = [
   'anthropic',
   'openai',
   'xai',
-  'opencode',
+  'opencode-go',
   'github-copilot',
   'poe',
   'minimax',

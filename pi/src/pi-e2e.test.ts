@@ -45,14 +45,13 @@ const envNames = [
   'SUBROUTER_ANTHROPIC_BASE_URL',
   'SUBROUTER_OPENAI_BASE_URL',
   'SUBROUTER_XAI_BASE_URL',
-  'SUBROUTER_OPENCODE_BASE_URL',
+  'SUBROUTER_OPENCODE_GO_BASE_URL',
 ] as const
 
-function openCodeTestModel(): Model<Api> {
-  const provider = builtinProviders().find((entry) => entry.id === 'opencode')
-  const model = provider?.getModels().find((entry) => entry.api === 'openai-completions')
-  if (!model) throw new Error('Pi has no OpenCode Chat Completions model for the integration test')
-  return model
+const OPENCODE_GO_TEST_MODEL = 'glm-5.3-flash'
+
+function openCodeTestModel() {
+  return { id: OPENCODE_GO_TEST_MODEL }
 }
 
 function openAITestModel(): Model<Api> {
@@ -311,7 +310,7 @@ describe.sequential('@subrouter/pi', () => {
       SUBROUTER_ANTHROPIC_BASE_URL: anthropicServer.url,
       SUBROUTER_OPENAI_BASE_URL: `${root}/blocked-openai`,
       SUBROUTER_XAI_BASE_URL: `${root}/blocked-xai`,
-      SUBROUTER_OPENCODE_BASE_URL: `${openCodeServer.url}/v1`,
+      SUBROUTER_OPENCODE_GO_BASE_URL: `${openCodeServer.url}/v1`,
     })
   })
 
@@ -394,12 +393,12 @@ describe.sequential('@subrouter/pi', () => {
       },
     })
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'fake-zen-key', addedAt: 1, lastUsed: 1 },
     })
     await savePreset({
       name: 'integration',
-      models: [`anthropic/${anthropicModel.id}`, `opencode/${openCodeModel.id}`],
+      models: [`anthropic/${anthropicModel.id}`, `opencode-go/${openCodeModel.id}`],
     })
 
     const session = await createPiSession('integration')
@@ -408,7 +407,7 @@ describe.sequential('@subrouter/pi', () => {
     const assistant = session.messages.findLast((message) => message.role === 'assistant')
     expect(assistant).toMatchObject({
       role: 'assistant',
-      provider: 'opencode',
+      provider: 'opencode-go',
       model: openCodeModel.id,
       stopReason: 'stop',
     })
@@ -431,14 +430,14 @@ describe.sequential('@subrouter/pi', () => {
       streamChatCompletion({ response, modelId: model.id, text: 'account B' })
     }
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'account-b', addedAt: 1, lastUsed: 1 },
     })
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'account-a', addedAt: 2, lastUsed: 2 },
     })
-    await savePreset({ name: 'accounts', models: [`opencode/${model.id}`] })
+    await savePreset({ name: 'accounts', models: [`opencode-go/${model.id}`] })
 
     const session = await createPiSession('accounts')
     await session.prompt('first')
@@ -563,14 +562,14 @@ describe.sequential('@subrouter/pi', () => {
       response.end(JSON.stringify({ error: { message: 'bad request' } }))
     }
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'fallback-account', addedAt: 1, lastUsed: 1 },
     })
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'first-account', addedAt: 2, lastUsed: 2 },
     })
-    await savePreset({ name: 'bad-request', models: [`opencode/${model.id}`] })
+    await savePreset({ name: 'bad-request', models: [`opencode-go/${model.id}`] })
 
     const session = await createPiSession('bad-request')
     await session.prompt('fail')
@@ -589,14 +588,14 @@ describe.sequential('@subrouter/pi', () => {
       streamChatCompletion({ response, modelId: model.id, text: 'duplicate answer' })
     }
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'fallback-account', addedAt: 1, lastUsed: 1 },
     })
     await addAccount({
-      provider: 'opencode',
+      provider: 'opencode-go',
       account: { type: 'api', key: 'first-account', addedAt: 2, lastUsed: 2 },
     })
-    await savePreset({ name: 'partial', models: [`opencode/${model.id}`] })
+    await savePreset({ name: 'partial', models: [`opencode-go/${model.id}`] })
 
     const session = await createPiSession('partial')
     await session.prompt('partial')
