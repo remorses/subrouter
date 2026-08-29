@@ -12,6 +12,9 @@
   "icons": {
     "library": "lucide"
   },
+  "layout": {
+    "mode": "compact"
+  },
   "navbar": {
     "links": [
       {
