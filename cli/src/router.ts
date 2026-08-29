@@ -7,7 +7,8 @@
  * cooldown, and delegates to the first usable underlying model. When a call
  * fails with a rate-limit/usage error, the account is put in cooldown
  * (globally, in ~/.subrouter/state.json) and the next candidate is tried.
- * It only throws when every candidate is exhausted.
+ * Cooling-down-only failures throw a retryable 429 so OpenCode waits
+ * instead of dying. It only throws a hard error when nothing can be retried.
  */
 
 import type {
@@ -16,6 +17,7 @@ import type {
   LanguageModelV3StreamPart,
   LanguageModelV3StreamResult,
 } from '@ai-sdk/provider'
+import { APICallError } from '@ai-sdk/provider'
 import * as errore from 'errore'
 import { adapters, classifyFailure, failureDetailsFromError } from './adapters/index.ts'
 import {
@@ -30,6 +32,7 @@ import {
   markCooldown,
   updateAccount,
   accountLabel,
+  cooldownKey,
   type ProviderId,
   type StoredAccount,
   isProviderId,
@@ -103,11 +106,12 @@ export async function resolveCandidates({
 }: {
   presetModels: string[]
   now?: number
-}): Promise<{ candidates: Candidate[]; skipped: string[] }> {
+}): Promise<{ candidates: Candidate[]; skipped: string[]; retryAfterMs?: number }> {
   const accounts = await loadAccounts()
   const state = await loadState()
   const candidates: Candidate[] = []
   const skipped: string[] = []
+  let retryAfterMs: number | undefined
 
   for (const entry of presetModels) {
     const slash = entry.indexOf('/')
@@ -130,13 +134,47 @@ export async function resolveCandidates({
       if (!account) continue
       if (isCoolingDown({ state, provider, account, now })) {
         skipped.push(`${entry}: ${accountLabel(account, accountIndex)} cooling down`)
+        const until = state.cooldowns[cooldownKey({ provider, account })]
+        if (typeof until === 'number') {
+          const remaining = until - now
+          if (remaining > 0) {
+            retryAfterMs = retryAfterMs === undefined ? remaining : Math.min(retryAfterMs, remaining)
+          }
+        }
         continue
       }
       candidates.push({ provider, modelId, account, accountIndex })
     }
   }
 
-  return { candidates, skipped }
+  return { candidates, skipped, retryAfterMs }
+}
+
+// OpenCode only retries APICallError with isRetryable. A tagged NoUsableAccountError
+// becomes UnknownError and kills the session instead of waiting out the cooldown.
+function cooldownRetryError({
+  message,
+  retryAfterMs,
+  cause,
+}: {
+  message: string
+  retryAfterMs: number
+  cause?: Error
+}) {
+  const waitMs = Math.max(1, Math.ceil(retryAfterMs))
+  return new APICallError({
+    message,
+    url: 'https://subrouter.local/cooldown',
+    requestBodyValues: {},
+    statusCode: 429,
+    responseHeaders: {
+      'retry-after-ms': String(waitMs),
+      'retry-after': String(Math.max(1, Math.ceil(waitMs / 1000))),
+    },
+    responseBody: message,
+    isRetryable: true,
+    cause,
+  })
 }
 
 export function formatCandidateRef(candidate: Pick<Candidate, 'provider' | 'modelId'>) {
@@ -199,15 +237,18 @@ export class RouterModel implements LanguageModelV3 {
     const presetModels = await resolvePresetModels(this.modelId)
     if (presetModels instanceof Error) throw presetModels
 
-    const { candidates, skipped } = await resolveCandidates({ presetModels })
+    const { candidates, skipped, retryAfterMs } = await resolveCandidates({ presetModels })
     if (candidates.length === 0) {
-      throw new NoUsableAccountError({
-        preset: this.modelId,
-        reason: skipped.length > 0 ? skipped.join('; ') : 'no providers configured',
-      })
+      const reason = skipped.length > 0 ? skipped.join('; ') : 'no providers configured'
+      const error = new NoUsableAccountError({ preset: this.modelId, reason })
+      if (retryAfterMs !== undefined) {
+        throw cooldownRetryError({ message: error.message, retryAfterMs, cause: error })
+      }
+      throw error
     }
 
     const attempts: string[] = []
+    let soonestRetryAfterMs: number | undefined
     for (const candidate of candidates) {
       this.onEvent?.({ type: 'trying', candidate })
       const model = this.buildModel(candidate)
@@ -242,16 +283,28 @@ export class RouterModel implements LanguageModelV3 {
         account: candidate.account,
         untilMs: Date.now() + action.cooldownMs,
       })
+      soonestRetryAfterMs =
+        soonestRetryAfterMs === undefined
+          ? action.cooldownMs
+          : Math.min(soonestRetryAfterMs, action.cooldownMs)
       this.onEvent?.({ type: 'failover', candidate, error, cooldownMs: action.cooldownMs })
       attempts.push(
         `${candidate.provider}/${candidate.modelId} ${accountLabel(candidate.account, candidate.accountIndex)}: ${error.message}`,
       )
     }
 
-    throw new AllCandidatesExhaustedError({
+    const exhausted = new AllCandidatesExhaustedError({
       preset: this.modelId,
       attempts: attempts.join('; '),
     })
+    if (soonestRetryAfterMs !== undefined) {
+      throw cooldownRetryError({
+        message: exhausted.message,
+        retryAfterMs: soonestRetryAfterMs,
+        cause: exhausted,
+      })
+    }
+    throw exhausted
   }
 
   async doGenerate(options: LanguageModelV3CallOptions) {

@@ -10,7 +10,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import type { LanguageModelV3CallOptions } from '@ai-sdk/provider'
+import { APICallError, type LanguageModelV3CallOptions } from '@ai-sdk/provider'
 import {
   AllCandidatesExhaustedError,
   NoUsableAccountError,
@@ -228,7 +228,7 @@ describe('RouterModel failover', () => {
     expect(Object.keys(state.cooldowns)).toEqual([])
   })
 
-  test('throws AllCandidatesExhaustedError when every provider is rate limited', async () => {
+  test('exhausted and cooling-down accounts throw a retryable 429', async () => {
     const anthropicMock = await startMockServer(() => anthropic429)
     const opencodeMock = await startMockServer(() => ({
       status: 429,
@@ -247,11 +247,34 @@ describe('RouterModel failover', () => {
 
     const model = new RouterModel({ preset: 'test' })
     const result = await model.doGenerate(callOptions).catch((error: Error) => error)
-    expect(AllCandidatesExhaustedError.is(result)).toBe(true)
+    if (!APICallError.isInstance(result)) throw result
+    expect(result).toMatchObject({ statusCode: 429, isRetryable: true })
+    expect(AllCandidatesExhaustedError.is(result.cause)).toBe(true)
 
-    // Next call fails fast: everything is cooling down
     const second = await model.doGenerate(callOptions).catch((error: Error) => error)
-    expect(NoUsableAccountError.is(second)).toBe(true)
+    if (!APICallError.isInstance(second)) throw second
+    expect(second).toMatchObject({ statusCode: 429, isRetryable: true })
+    expect(second.message).toContain('cooling down')
+    expect(Number(second.responseHeaders?.['retry-after-ms'])).toBeGreaterThan(0)
+  })
+
+  test('all cooling-down accounts throw a retryable 429 instead of dying', async () => {
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake'] })
+    await markCooldown({
+      provider: 'anthropic',
+      account: oauthAccount({ email: 'a@x.com' }),
+      untilMs: Date.now() + 8_000,
+    })
+
+    const model = new RouterModel({ preset: 'test' })
+    const result = await model.doGenerate(callOptions).catch((error: Error) => error)
+    if (!APICallError.isInstance(result)) throw result
+    expect(NoUsableAccountError.is(result)).toBe(false)
+    expect(result).toMatchObject({ statusCode: 429, isRetryable: true })
+    const retryAfterMs = Number(result.responseHeaders?.['retry-after-ms'])
+    expect(retryAfterMs).toBeGreaterThan(1_000)
+    expect(retryAfterMs).toBeLessThanOrEqual(8_000)
   })
 
   test('resolveActiveCandidate returns the first usable account', async () => {
