@@ -264,6 +264,74 @@ The `default` preset is built in. It uses the newest model from each provider in
 
 Then pick `subrouter/default` (or any `subrouter/<preset>`) as the model. Presets created after opencode Go starts appear on the next opencode Go restart.
 
+### Use cases
+
+**Rotate when credits run out.** Log in more than one account. When the first subscription hits a rate limit or spends its quota, Subrouter cools it down and sends the next request to the next account. You keep working.
+
+```bash
+npx @subrouter/cli login anthropic
+npx @subrouter/cli login anthropic   # second Claude account
+npx @subrouter/cli login openai
+```
+
+Pick `subrouter/default` as the session model. The next request after a 429 or 402 goes to the next account in the preset.
+
+**One model for every agent.** Point the session and every agent at a **subrouter preset**. You log in once per subscription. You do not re-login inside OpenCode when a provider dies. You do not change 100 agent files to swap `anthropic/...` for `openai/...`.
+
+```json
+{
+  "model": "subrouter/default",
+  "agent": {
+    "explore": { "model": "subrouter/default" },
+    "plan": { "model": "subrouter/default" }
+  }
+}
+```
+
+When Claude is out, ChatGPT takes over. When that one is out, Grok takes over. The model id in config stays `subrouter/default`.
+
+**Tasks and subagents.** OpenCode primary sessions launch specialized agents through the Task tool. **Explore** is the usual case: a fast, read-only agent that searches the repo.
+
+Those agents often pin a **specific model**. When that model hits a rate limit or runs out of credits, the task fails. The parent session then stops with an error, even when other subscriptions still have quota.
+
+Set the agent model to a **subrouter preset**. Subrouter rotates to the next subscription, so the task continues.
+
+```json
+{
+  "agent": {
+    "explore": {
+      "model": "subrouter/default"
+    }
+  }
+}
+```
+
+The same field works in markdown agents under `~/.config/opencode/agents/`:
+
+```yaml
+---
+description: Fast read-only codebase search
+mode: subagent
+model: subrouter/default
+---
+```
+
+Any other Task subagent works the same way: set `model` to `subrouter/<preset>` instead of a single provider model.
+
+```diagram
+                 parent session
+                       │
+                       v
+                    Task tool
+                       │
+                       v
+      explore agent (model: subrouter/default)
+                       │
+                       ├──> first subscription 429 ──> cooldown
+                       │
+                       └──> next subscription ──> task continues
+```
+
 ## Pi plugin
 
 `@subrouter/pi` registers the same presets as models in Pi. It delegates each request to Pi's native provider stream. Poe and Alibaba use Pi's native OpenAI-compatible provider API. Subrouter selects the subscription, but it does not translate requests or responses between provider formats.
