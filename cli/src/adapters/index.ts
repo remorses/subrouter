@@ -190,10 +190,14 @@ const MODELS_DEV_PROVIDER_KEYS = [
   'alibaba-coding-plan',
 ] as const
 
-const CATALOG_TTL_MS = 24 * 60 * 60 * 1000
+const CATALOG_TTL_MS = 60 * 60 * 1000
 
 function catalogCachePath() {
   return path.join(subrouterHome(), 'models-dev.json')
+}
+
+function modelsDevUrl() {
+  return process.env.SUBROUTER_MODELS_DEV_URL ?? 'https://models.dev/api.json'
 }
 
 function trimModelsDevPayload(payload: object) {
@@ -267,29 +271,6 @@ export function modelsDevLimit({
   return catalog[provider].get(modelId) ?? null
 }
 
-async function fetchModelsDevPayload() {
-  // Tests point this at a local server. Never hit models.dev from a unit test.
-  const url = modelsDevUrl()
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(10_000),
-  }).catch((cause) => new ModelsDevError({ reason: 'request failed', cause }))
-  if (response instanceof Error) return response
-  if (!response.ok) return new ModelsDevError({ reason: `HTTP ${response.status}` })
-
-  const payload = await response.json().catch(
-    (cause) => new ModelsDevError({ reason: 'invalid JSON response', cause }),
-  )
-  if (payload instanceof Error) return payload
-  if (!payload || typeof payload !== 'object') {
-    return new ModelsDevError({ reason: 'invalid response shape' })
-  }
-  return payload
-}
-
-function modelsDevUrl() {
-  return process.env.SUBROUTER_MODELS_DEV_URL ?? 'https://models.dev/api.json'
-}
-
 export async function loadModelsDevCatalog() {
   const url = modelsDevUrl()
   const cached = await readJson<{ fetchedAt: number; url: string; payload: object } | null>(
@@ -317,6 +298,25 @@ export async function loadModelsDevCatalog() {
     console.warn(cachedWrite.message)
   }
   return parseModelsDevCatalog(trimmed)
+}
+
+async function fetchModelsDevPayload() {
+  // Tests point this at a local server. Never hit models.dev from a unit test.
+  const url = modelsDevUrl()
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(10_000),
+  }).catch((cause) => new ModelsDevError({ reason: 'request failed', cause }))
+  if (response instanceof Error) return response
+  if (!response.ok) return new ModelsDevError({ reason: `HTTP ${response.status}` })
+
+  const payload = await response.json().catch(
+    (cause) => new ModelsDevError({ reason: 'invalid JSON response', cause }),
+  )
+  if (payload instanceof Error) return payload
+  if (!payload || typeof payload !== 'object') {
+    return new ModelsDevError({ reason: 'invalid response shape' })
+  }
+  return payload
 }
 
 export function validateModelsDevModelIds({

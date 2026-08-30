@@ -1,5 +1,5 @@
 import { createServer } from 'node:http'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'vitest'
@@ -209,6 +209,80 @@ describe('models.dev validation', () => {
       expect(modelsDevLimit({ provider: 'openai', modelId: 'text-only', catalog: third })).toEqual({
         context: 400_000,
         output: 32_000,
+      })
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve()
+        })
+      })
+      if (previousHome === undefined) delete process.env.SUBROUTER_HOME
+      else process.env.SUBROUTER_HOME = previousHome
+      if (previousUrl === undefined) delete process.env.SUBROUTER_MODELS_DEV_URL
+      else process.env.SUBROUTER_MODELS_DEV_URL = previousUrl
+      await rm(home, { recursive: true, force: true })
+    }
+  })
+
+  test('refetches models.dev when the cache is older than one hour', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'subrouter-catalog-stale-'))
+    const previousHome = process.env.SUBROUTER_HOME
+    const previousUrl = process.env.SUBROUTER_MODELS_DEV_URL
+    process.env.SUBROUTER_HOME = home
+    let hits = 0
+    const server = createServer((_req, res) => {
+      hits += 1
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          ...payload,
+          openai: {
+            models: {
+              'text-only': {
+                id: 'text-only',
+                modalities: { output: ['text'] },
+                limit: { context: 800_000, output: 64_000 },
+              },
+            },
+          },
+        }),
+      )
+    })
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address()
+    if (typeof address === 'string' || !address) throw new Error('failed to bind fake models.dev')
+    const url = `http://127.0.0.1:${address.port}`
+    process.env.SUBROUTER_MODELS_DEV_URL = url
+    await writeFile(
+      path.join(home, 'models-dev.json'),
+      JSON.stringify({
+        fetchedAt: Date.now() - 61 * 60 * 1000,
+        url,
+        payload: {
+          ...payload,
+          openai: {
+            models: {
+              'text-only': {
+                id: 'text-only',
+                modalities: { output: ['text'] },
+                limit: { context: 400_000, output: 32_000 },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    try {
+      const catalog = await loadModelsDevCatalog()
+      expect(catalog).not.toBeInstanceOf(Error)
+      expect(hits).toBe(1)
+      if (catalog instanceof Error) return
+      expect(modelsDevLimit({ provider: 'openai', modelId: 'text-only', catalog })).toEqual({
+        context: 800_000,
+        output: 64_000,
       })
     } finally {
       await new Promise<void>((resolve) => {
