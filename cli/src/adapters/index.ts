@@ -460,8 +460,24 @@ function quotaExhaustedText(text: string) {
   )
 }
 
+function headerValue(headers: Record<string, string> | undefined, name: string) {
+  if (!headers) return undefined
+  const wanted = name.toLowerCase()
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === wanted) return value
+  }
+  return undefined
+}
+
+// Same header order as OpenCode: retry-after-ms, then retry-after seconds, then HTTP date.
+// https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/retry.ts
 function retryAfterMs(headers: Record<string, string> | undefined) {
-  const raw = headers?.['retry-after']
+  const millisRaw = headerValue(headers, 'retry-after-ms')
+  if (millisRaw) {
+    const millis = Number(millisRaw)
+    if (Number.isFinite(millis) && millis > 0) return millis
+  }
+  const raw = headerValue(headers, 'retry-after')
   if (!raw) return undefined
   const seconds = Number(raw)
   if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000
@@ -470,10 +486,17 @@ function retryAfterMs(headers: Record<string, string> | undefined) {
   return undefined
 }
 
+function rotateCooldownMs(headers: Record<string, string> | undefined) {
+  const fromHeader = retryAfterMs(headers)
+  if (fromHeader === undefined || fromHeader <= 0) return DEFAULT_COOLDOWN_MS
+  return fromHeader
+}
+
 /**
  * Decide whether an error from a model call should trigger failover.
  * 402 means the subscription balance is exhausted (xAI Grok Build), which
- * gets a long cooldown. 429/401/403 and usage-limit texts get a short one.
+ * gets a long cooldown. 429/401/403 and usage-limit texts get a short one,
+ * or the provider's retry-after / retry-after-ms when that header is present.
  */
 export function failureDetailsFromError(error: Error): FailureDetails {
   if (APICallError.isInstance(error)) {
@@ -492,13 +515,10 @@ export function classifyFailure({ statusCode: status, headers, message, body = '
     return { rotate: true, cooldownMs: EXHAUSTED_COOLDOWN_MS }
   }
   if (status === 402) return { rotate: true, cooldownMs: EXHAUSTED_COOLDOWN_MS }
-  if (status === 429) {
-    const fromHeader = retryAfterMs(headers)
-    return { rotate: true, cooldownMs: Math.max(fromHeader ?? 0, DEFAULT_COOLDOWN_MS) }
-  }
-  if (status === 401 || status === 403) return { rotate: true, cooldownMs: DEFAULT_COOLDOWN_MS }
+  if (status === 429) return { rotate: true, cooldownMs: rotateCooldownMs(headers) }
+  if (status === 401 || status === 403) return { rotate: true, cooldownMs: rotateCooldownMs(headers) }
   if (rotateWorthyText(`${message} ${body}`)) {
-    return { rotate: true, cooldownMs: DEFAULT_COOLDOWN_MS }
+    return { rotate: true, cooldownMs: rotateCooldownMs(headers) }
   }
   return null
 }

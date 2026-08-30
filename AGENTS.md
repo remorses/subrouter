@@ -118,7 +118,9 @@ Users never hand-edit config files. All state is created through the CLI (`subro
 
 ## Cooldowns are global machine scope
 
-Rate-limit state lives in `~/.subrouter/config.json`, shared by every process and harness on the machine, so a rate-limited subscription is not retried per-session. Never shorten an existing cooldown. 429 honors `retry-after` (min 5 minutes); 402 (balance exhausted) cools down 6 hours.
+Rate-limit state lives in `~/.subrouter/config.json`, shared by every process and harness on the machine, so a rate-limited subscription is not retried per-session. Never shorten an existing cooldown. 429 and usage-limit errors honor `retry-after` / `retry-after-ms` when the provider sends them. Otherwise 5 minutes. 402 (balance exhausted) cools down 6 hours.
+
+OpenCode does not throw a custom cooldown class into the provider. Rate limits arrive as AI SDK `APICallError` with those headers. Read OpenCode's parser before changing this: https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/retry.ts
 
 ## Harness plugins
 

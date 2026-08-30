@@ -27,6 +27,46 @@ describe('classifyFailure', () => {
     expect(action).toEqual({ rotate: true, cooldownMs: 600_000 })
   })
 
+  test('429 uses retry-after-ms when present instead of the 5 minute default', () => {
+    const action = classifyFailure({
+      statusCode: 429,
+      headers: { 'retry-after-ms': '1500' },
+      message: 'rate limited',
+    })
+    expect(action).toEqual({ rotate: true, cooldownMs: 1500 })
+  })
+
+  test('429 uses a short retry-after instead of clamping to 5 minutes', () => {
+    const action = classifyFailure({
+      statusCode: 429,
+      headers: { 'Retry-After': '30' },
+      message: 'rate limited',
+    })
+    expect(action).toEqual({ rotate: true, cooldownMs: 30_000 })
+  })
+
+  test('usage-limit text uses retry-after when present', () => {
+    const action = classifyFailure({
+      message: 'The usage limit has been reached',
+      headers: { 'retry-after': '19380' },
+    })
+    expect(action).toEqual({ rotate: true, cooldownMs: 19_380_000 })
+  })
+
+  test('429 without a usable retry-after stays at 5 minutes', () => {
+    expect(classifyFailure({ statusCode: 429, message: 'rate limited' })).toEqual({
+      rotate: true,
+      cooldownMs: 5 * 60 * 1000,
+    })
+    expect(
+      classifyFailure({
+        statusCode: 429,
+        headers: { 'retry-after': new Date(Date.now() - 5_000).toUTCString() },
+        message: 'rate limited',
+      }),
+    ).toEqual({ rotate: true, cooldownMs: 5 * 60 * 1000 })
+  })
+
   test('402 balance exhausted gets a long cooldown', () => {
     const action = classifyFailure({ statusCode: 402, body: 'Grok Build usage balance exhausted', message: 'exhausted' })
     expect(action?.rotate).toBe(true)
