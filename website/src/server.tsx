@@ -1,6 +1,7 @@
 // Entry point for the subrouter docs website.
 // Mounts holocron docs and adds a /gh redirect.
 
+import '../style.css'
 import { Spiceflow } from 'spiceflow'
 import { app as holocronApp } from '@holocron.so/vite/app'
 export const app = new Spiceflow()

@@ -1,0 +1,11 @@
+/* Holocron token overrides. Loaded from src/server.tsx because custom entry skips root style.css auto-detect. */
+
+:root {
+  --sidebar-font-size: 12px;
+}
+
+@media (width >= 80rem) {
+  :root {
+    --sidebar-font-size: 12px;
+  }
+}
