@@ -13,7 +13,9 @@
     "library": "lucide"
   },
   "layout": {
-    "mode": "compact"
+    "mode": "compact",
+    "maxWidth": 990,
+    "sidebarWidth": 180
   },
   "navbar": {
     "links": [
