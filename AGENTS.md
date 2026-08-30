@@ -174,7 +174,7 @@ The site is served from two Cloudflare custom domains, `subrouter.org` and `www.
 
 ## Testing rules
 
-- **No real API calls in tests.** Fake provider endpoints with local HTTP servers; every adapter has a matching `SUBROUTER_<PROVIDER>_BASE_URL` override.
+- **No real API calls in tests.** Fake provider endpoints with local HTTP servers; every adapter has a matching `SUBROUTER_<PROVIDER>_BASE_URL` override. `SUBROUTER_MODELS_DEV_URL` points `loadModelsDevCatalog()` at a local catalog.
 - `cli/src/router.test.ts` covers rotation order, cooldown recording, non-rotate errors passing through, exhaustion errors.
 - `opencode/src/opencode-e2e.test.ts` boots a real `opencode serve` (devDep `opencode-ai`) with fake endpoints and asserts a 429 provider is cycled to the fallback through the whole pipeline. It loads `opencode/dist/provider.js`, so run `pnpm build` before tests.
 - `pi/src/pi-e2e.test.ts` loads `pi/dist/index.js` through Pi's real `ResourceLoader`, uses in-memory Pi stores and local HTTP endpoints, and covers account rotation, cross-provider fallback, non-rotate errors, and partial-stream safety.
@@ -185,6 +185,88 @@ pnpm install
 pnpm build      # required before opencode e2e
 pnpm test
 ```
+
+## Live opencode CLI checks
+
+Automated tests use fake HTTP servers. After changing adapters, the router, or the OpenCode plugin, also run a **real** `opencode run` against the local plugin. OpenCode loads `@subrouter/cli` from **dist**, so rebuild first:
+
+```bash
+pnpm --filter @subrouter/cli build
+```
+
+The machine plugin path is already `subrouter/opencode/src/index.ts` in `~/.config/opencode/opencode.json`. Do not use `npx @subrouter/opencode`.
+
+### Isolate vs cycle
+
+Protocol bugs hide if the preset failovers to Anthropic. Use **two** runs:
+
+1. **Isolate Codex.** `-m subrouter/openai-only` has no fallback. A follow-up crash is a real Codex bug.
+2. **Prove cycling.** `-m subrouter/openai-first` ranks OpenAI then Anthropic. A usage-limit on Codex must continue on Anthropic.
+
+Check who is live before the cycle run:
+
+```bash
+subrouter account list --json
+subrouter preset show openai-first
+```
+
+Only **rate-limit / usage-limit / 401 / 403 / 402** rotate. A 400 like `Items are not persisted when store is set to false` must **not** cycle. That is a protocol bug; isolating with `openai-only` is how you see it.
+
+### Follow-up turn (the Codex `store:false` case)
+
+One user message that forces a tool, then a second model call:
+
+```bash
+opencode run --print-logs --log-level INFO --auto \
+  -m subrouter/openai-only \
+  --dir /tmp \
+  --title 'subrouter-codex-followup' \
+  'Use the bash tool to run pwd. Then reply with only the last path segment of that directory.'
+```
+
+Pass criteria:
+
+- logs show `providerID=subrouter modelID=openai-only`
+- `pwd` runs
+- a second `stream` line happens
+- **no** `Items are not persisted when store is set to false`
+- the process prints the last path segment and `exiting loop`
+
+`--auto` only auto-approves permissions that would **ask**. Explicit **deny** still blocks. This machine already allows `bash`; `--auto` still matters for `external_directory` and `doom_loop`. Docs: https://opencode.ai/docs/permissions/#auto-mode
+
+### Cycling
+
+```bash
+opencode run --print-logs --log-level INFO --auto \
+  -m subrouter/openai-first \
+  --dir /tmp \
+  --title 'subrouter-cycle' \
+  'Reply with one word: ping'
+```
+
+If Codex is in cooldown or returns a usage-limit, logs must show a later stream that succeeds (Anthropic). If Codex is healthy, this run staying on OpenAI is expected. To force a cycle, put a known-limited Codex account first, or wait until it 429s. Do not invent a second account.
+
+### Agents
+
+`--agent oracle` does **not** run oracle. Oracle (and explore) are **subagents**. `opencode run --agent` only accepts a **primary** agent, so it falls back to **build**.
+
+To exercise oracle:
+
+```bash
+opencode run --print-logs --log-level INFO --auto \
+  -m subrouter/review \
+  --dir /tmp \
+  --title 'spawn-oracle' \
+  'Use the Task tool with subagent_type oracle. Prompt: Reply with one word: pong. Wait. Paste the answer.'
+```
+
+Logs must show `agent=oracle mode=subagent` and `modelID=review`, then a follow-up `stream` without the store-false error.
+
+### What not to use
+
+- **TUI.** Agents use `opencode run`.
+- `kimaki session export-events-jsonl`. That dump is only for **Discord-mapped** Kimaki sessions. `opencode run` sessions are not in that SQLite buffer. Use `--print-logs` and `kimaki session read <ses_...>`.
+- Published npm packages. Always the local workspace plugin + freshly built `cli/dist`.
 
 ## Conventions
 
