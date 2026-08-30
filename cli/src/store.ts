@@ -201,7 +201,8 @@ function normalizeLogins(input: Partial<ConfigFile['logins']> | undefined): Conf
   return logins
 }
 
-function normalizeConfig(raw: Partial<ConfigFile> | null): ConfigFile {
+async function loadConfigUnlocked(): Promise<ConfigFile> {
+  const raw = await readJson<Partial<ConfigFile> | null>(configFilePath(), null)
   return {
     version: 1,
     providers: normalizeProviders(raw?.providers),
@@ -209,10 +210,6 @@ function normalizeConfig(raw: Partial<ConfigFile> | null): ConfigFile {
     cooldowns: normalizeCooldowns(raw?.cooldowns),
     logins: normalizeLogins(raw?.logins),
   }
-}
-
-async function loadConfigUnlocked(): Promise<ConfigFile> {
-  return normalizeConfig(await readJson<Partial<ConfigFile> | null>(configFilePath(), null))
 }
 
 async function saveConfigUnlocked(file: ConfigFile) {
