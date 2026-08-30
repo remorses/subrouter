@@ -13,6 +13,7 @@ import {
   loadPresets,
   loadState,
   markCooldown,
+  orderAccounts,
   removeAccount,
   removePreset,
   savePreset,
@@ -20,6 +21,14 @@ import {
   writeJson,
   type StoredAccount,
 } from './store.ts'
+import {
+  ACCOUNTS_SCHEMA_URL,
+  LOGIN_SCHEMA_URL,
+  accountsJsonSchema,
+  loginJsonSchema,
+  presetsJsonSchema,
+  stateJsonSchema,
+} from './schemas.ts'
 
 let home: string
 
@@ -104,6 +113,52 @@ describe('JSON persistence', () => {
 })
 
 describe('accounts', () => {
+  test('JSON schemas expose the config fields', () => {
+    expect({
+      accounts: Object.keys(accountsJsonSchema.properties ?? {}),
+      presets: Object.keys(presetsJsonSchema.properties ?? {}),
+      state: Object.keys(stateJsonSchema.properties ?? {}),
+      login: Object.keys(loginJsonSchema.properties ?? {}),
+    }).toMatchInlineSnapshot(`
+      {
+        "accounts": [
+          "$schema",
+          "version",
+          "providers",
+        ],
+        "login": [
+          "$schema",
+          "provider",
+          "status",
+          "instructions",
+          "url",
+          "error",
+        ],
+        "presets": [
+          "$schema",
+          "version",
+          "presets",
+        ],
+        "state": [
+          "$schema",
+          "version",
+          "cooldowns",
+        ],
+      }
+    `)
+  })
+
+  test('writes $schema on known config files', async () => {
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await writeJson(loginStatePath('anthropic'), {
+      provider: 'anthropic',
+      status: 'pending',
+    })
+
+    expect(JSON.parse(await readFile(path.join(home, 'accounts.json'), 'utf8')).$schema).toBe(ACCOUNTS_SCHEMA_URL)
+    expect(JSON.parse(await readFile(loginStatePath('anthropic'), 'utf8')).$schema).toBe(LOGIN_SCHEMA_URL)
+  })
+
   test('adding an account clears the provider login state', async () => {
     const loginPath = loginStatePath('anthropic')
     await writeJson(loginPath, {
@@ -168,6 +223,41 @@ describe('accounts', () => {
     const account = oauthAccount({ email: 'Someone@X.com' })
     expect(accountKey(account)).toBe('someone@x.com')
     expect(accountLabel(account, 0)).toBe('#1 (Someone@X.com)')
+  })
+
+  test('orderAccounts ranks every email and rejects incomplete lists', async () => {
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await addAccount({
+      provider: 'anthropic',
+      account: oauthAccount({ refresh: 'refresh-2', access: 'access-2', email: 'b@x.com' }),
+    })
+    await addAccount({
+      provider: 'anthropic',
+      account: oauthAccount({ refresh: 'refresh-3', access: 'access-3', email: 'c@x.com' }),
+    })
+
+    const incomplete = await orderAccounts({
+      provider: 'anthropic',
+      emails: ['c@x.com', 'a@x.com'],
+    })
+    expect(incomplete instanceof Error).toBe(true)
+    expect(incomplete).toMatchInlineSnapshot(`[StoreError: Subrouter store error: List every anthropic email exactly once: a@x.com b@x.com c@x.com]`)
+
+    const unknown = await orderAccounts({
+      provider: 'anthropic',
+      emails: ['c@x.com', 'a@x.com', 'nope@x.com'],
+    })
+    expect(unknown instanceof Error).toBe(true)
+    expect(unknown).toMatchInlineSnapshot(`[StoreError: Subrouter store error: unknown email nope@x.com. List every anthropic email exactly once: a@x.com b@x.com c@x.com]`)
+
+    const ordered = await orderAccounts({
+      provider: 'anthropic',
+      emails: ['C@x.com', 'a@x.com', 'b@x.com'],
+    })
+    expect(ordered instanceof Error).toBe(false)
+    const pool = (await loadAccounts()).providers.anthropic!
+    expect(pool.accounts.map((account) => account.email)).toEqual(['c@x.com', 'a@x.com', 'b@x.com'])
+    expect(pool.activeIndex).toBe(0)
   })
 })
 

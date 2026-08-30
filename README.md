@@ -194,9 +194,19 @@ npx @subrouter/cli logout <provider> [--force]      # remove all accounts for a 
 npx @subrouter/cli account list [--json]     # accounts + cooldown status
 npx @subrouter/cli account status [provider] # exits 1 until login completes
 npx @subrouter/cli account remove <provider> <n|email> [--force]
+npx @subrouter/cli account order --provider anthropic work@x.com personal@x.com
 ```
 
 `account list` numbers accounts from 1. Run `login` again with the same provider to add another account to its rotation pool.
+
+`account order` sets the fallback order inside one provider. Pass **every** account email. The first email is tried first.
+
+Local JSON files under `~/.subrouter` include a `$schema` URL so editors can autocomplete fields:
+
+- [accounts.json](https://subrouter.org/accounts.json)
+- [presets.json](https://subrouter.org/presets.json)
+- [state.json](https://subrouter.org/state.json)
+- [login.json](https://subrouter.org/login.json)
 
 ### Presets
 

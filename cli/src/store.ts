@@ -13,27 +13,30 @@ import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import {
+  ACCOUNTS_SCHEMA_URL,
+  LOGIN_SCHEMA_URL,
+  PRESETS_SCHEMA_URL,
+  PROVIDER_IDS,
+  STATE_SCHEMA_URL,
+  type AccountsFile,
+  type LoginState,
+  type PresetsFile,
+  type ProviderAccounts,
+  type ProviderId,
+  type StateFile,
+  type StoredAccount,
+} from './schemas.ts'
 
-export const PROVIDER_IDS = [
-  'anthropic',
-  'openai',
-  'xai',
-  'opencode-go',
-  'github-copilot',
-  'poe',
-  'minimax',
-  'kimi',
-  'zai',
-  'alibaba',
-] as const
-export type ProviderId = (typeof PROVIDER_IDS)[number]
-
-export type LoginState = {
-  provider: ProviderId
-  status: 'pending' | 'error'
-  instructions?: string
-  url?: string
-  error?: string
+export {
+  PROVIDER_IDS,
+  type AccountsFile,
+  type LoginState,
+  type PresetsFile,
+  type ProviderAccounts,
+  type ProviderId,
+  type StateFile,
+  type StoredAccount,
 }
 
 export function isProviderId(value: string): value is ProviderId {
@@ -78,6 +81,15 @@ export async function readJson<T>(filePath: string, fallback: T): Promise<T> {
   return parsed
 }
 
+function schemaUrlFor(filePath: string) {
+  const name = path.basename(filePath)
+  if (name === 'accounts.json') return ACCOUNTS_SCHEMA_URL
+  if (name === 'presets.json') return PRESETS_SCHEMA_URL
+  if (name === 'state.json') return STATE_SCHEMA_URL
+  if (name.startsWith('login-') && name.endsWith('.json')) return LOGIN_SCHEMA_URL
+  return null
+}
+
 export async function writeJson(filePath: string, value: object) {
   const directory = path.dirname(filePath)
   const temporaryPath = path.join(
@@ -85,11 +97,13 @@ export async function writeJson(filePath: string, value: object) {
     `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
   )
   await fs.mkdir(directory, { recursive: true })
+  const schema = schemaUrlFor(filePath)
+  const payload = schema ? { $schema: schema, ...value } : value
 
   try {
     const temporaryFile = await fs.open(temporaryPath, 'wx', 0o600)
     try {
-      await temporaryFile.writeFile(JSON.stringify(value, null, 2) + '\n', 'utf8')
+      await temporaryFile.writeFile(JSON.stringify(payload, null, 2) + '\n', 'utf8')
       await temporaryFile.sync()
     } finally {
       await temporaryFile.close()
@@ -152,29 +166,6 @@ export async function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // --- Accounts ---
-
-export type StoredAccount = {
-  /** oauth accounts carry refresh/access/expires, api accounts carry key */
-  type: 'oauth' | 'api'
-  refresh?: string
-  access?: string
-  expires?: number
-  key?: string
-  email?: string
-  accountId?: string
-  addedAt: number
-  lastUsed: number
-}
-
-export type ProviderAccounts = {
-  activeIndex: number
-  accounts: StoredAccount[]
-}
-
-export type AccountsFile = {
-  version: 1
-  providers: Partial<Record<ProviderId, ProviderAccounts>>
-}
 
 function normalizeProviderAccounts(input: Partial<ProviderAccounts> | undefined): ProviderAccounts {
   const accounts = Array.isArray(input?.accounts)
@@ -315,13 +306,58 @@ export async function removeAccount({
   })
 }
 
-// --- Presets ---
-
-export type PresetsFile = {
-  version: 1
-  /** preset name -> ordered list of `provider/model` entries */
-  presets: Record<string, string[]>
+function accountEmails(accounts: StoredAccount[]) {
+  return accounts.map((account) => account.email?.trim()).filter((email): email is string => Boolean(email))
 }
+
+function orderEmailsHint({ provider, accounts }: { provider: ProviderId; accounts: StoredAccount[] }) {
+  return `List every ${provider} email exactly once: ${accountEmails(accounts).join(' ')}`
+}
+
+/** Reorder a provider pool. `emails` must name every account exactly once. */
+export async function orderAccounts({
+  provider,
+  emails,
+}: {
+  provider: ProviderId
+  emails: string[]
+}): Promise<StoreError | StoredAccount[]> {
+  return withStoreLock(async () => {
+    const file = await loadAccounts()
+    const pool = file.providers[provider]
+    if (!pool || pool.accounts.length === 0) {
+      return new StoreError({ reason: `no accounts for ${provider}. Run: subrouter login ${provider}` })
+    }
+    if (pool.accounts.some((account) => !account.email?.trim())) {
+      return new StoreError({ reason: `every ${provider} account needs an email before it can be ordered` })
+    }
+    const wanted = emails.map((email) => email.trim().toLowerCase()).filter(Boolean)
+    if (wanted.length !== pool.accounts.length) {
+      return new StoreError({ reason: orderEmailsHint({ provider, accounts: pool.accounts }) })
+    }
+    const duplicate = wanted.find((email, index) => wanted.indexOf(email) !== index)
+    if (duplicate) {
+      return new StoreError({
+        reason: `duplicate email ${duplicate}. ${orderEmailsHint({ provider, accounts: pool.accounts })}`,
+      })
+    }
+    const byEmail = new Map(
+      pool.accounts.map((account) => [account.email!.trim().toLowerCase(), account] as const),
+    )
+    const unknown = wanted.find((email) => !byEmail.has(email))
+    if (unknown) {
+      return new StoreError({
+        reason: `unknown email ${unknown}. ${orderEmailsHint({ provider, accounts: pool.accounts })}`,
+      })
+    }
+    pool.accounts = wanted.map((email) => byEmail.get(email)!)
+    pool.activeIndex = 0
+    await saveAccounts(file)
+    return pool.accounts
+  })
+}
+
+// --- Presets ---
 
 export async function loadPresets(): Promise<PresetsFile> {
   const raw = await readJson<Partial<PresetsFile> | null>(presetsFilePath(), null)
@@ -352,12 +388,6 @@ export async function removePreset(name: string): Promise<StoreError | null> {
 }
 
 // --- Cooldowns ---
-
-export type StateFile = {
-  version: 1
-  /** `${provider}:${accountKey}` -> epoch ms until which the account is unusable */
-  cooldowns: Record<string, number>
-}
 
 export async function loadState(): Promise<StateFile> {
   const raw = await readJson<Partial<StateFile> | null>(stateFilePath(), null)

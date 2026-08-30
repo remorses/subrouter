@@ -23,6 +23,7 @@ import {
   loadAccounts,
   loadPresets,
   loadState,
+  orderAccounts,
   PROVIDER_IDS,
   readJson,
   removeAccount,
@@ -61,21 +62,26 @@ function fail(ctx: GokeExecutionContext, message: string): never {
   exit(ctx, 1)
 }
 
-async function pickProvider(
-  provided: string | undefined,
-  ctx: GokeExecutionContext,
-): Promise<ProviderId> {
+async function pickProvider({
+  provided,
+  ctx,
+  missing = `Missing provider. Usage: subrouter login <${PROVIDER_IDS.join('|')}>`,
+  prompt = 'Which subscription do you want to add?',
+}: {
+  provided: string | undefined
+  ctx: GokeExecutionContext
+  missing?: string
+  prompt?: string
+}): Promise<ProviderId> {
   if (provided) {
     if (!isProviderId(provided)) {
       fail(ctx, `Unknown provider ${provided}. Valid providers: ${PROVIDER_IDS.join(', ')}`)
     }
     return provided
   }
-  if (isAgent || !process.stdin.isTTY) {
-    fail(ctx, `Missing provider. Usage: subrouter login <${PROVIDER_IDS.join('|')}>`)
-  }
+  if (isAgent || !process.stdin.isTTY) fail(ctx, missing)
   const choice = await clack.select({
-    message: 'Which subscription do you want to add?',
+    message: prompt,
     options: PROVIDER_IDS.map((id) => ({ value: id, label: adapters[id].name })),
   })
   if (typeof choice === 'symbol') exit(ctx, 0)
@@ -371,7 +377,7 @@ cli
   .command('account status [provider]', 'Check provider login status (exits 1 if not logged in)')
   .example('subrouter account status anthropic')
   .action(async (provider, _options, ctx) => {
-    const id = await pickProvider(provider, ctx)
+    const id = await pickProvider({ provided: provider, ctx })
     // The login state is checked before the stored accounts on purpose. Counting
     // accounts first reported success for a login that never finished, because
     // the expired account the user was replacing was still on disk. Every login
@@ -429,6 +435,61 @@ cli
     const removed = await removeAccount({ provider, index })
     if (removed instanceof Error) fail(ctx, removed.message)
     ctx.console.log(`Removed ${provider} account ${accountLabel(removed)}`)
+  })
+
+cli
+  .command(
+    'account order [...emails]',
+    dedent`
+      Set the rotation order for one provider. Pass every account email.
+
+      The first email is tried first. Later emails are fallbacks when that
+      account hits a rate or usage limit.
+    `,
+  )
+  .option(
+    '--provider [provider]',
+    z.enum(PROVIDER_IDS).optional().describe('Provider whose accounts to reorder'),
+  )
+  .example('subrouter account order --provider anthropic work@x.com personal@x.com')
+  .action(async (emails, options, ctx) => {
+    const provider = await pickProvider({
+      provided: options.provider,
+      ctx,
+      missing: `Missing --provider. Usage: subrouter account order --provider <${PROVIDER_IDS.join('|')}> <email> <email>`,
+      prompt: 'Which provider accounts do you want to reorder?',
+    })
+    const accounts = await loadAccounts()
+    const pool = accounts.providers[provider]
+    if (!pool || pool.accounts.length === 0) {
+      fail(ctx, `No accounts for ${provider}. Run: subrouter login ${provider}`)
+    }
+    const currentEmails = pool.accounts.map((account) => account.email?.trim()).filter(Boolean)
+    if (currentEmails.length !== pool.accounts.length) {
+      fail(ctx, `Every ${provider} account needs an email before it can be ordered`)
+    }
+    const listed = await (async () => {
+      const fromArgs = emails.flatMap((entry) => entry.split(',')).map((entry) => entry.trim()).filter(Boolean)
+      if (fromArgs.length > 0) return fromArgs
+      if (isAgent || !process.stdin.isTTY) {
+        fail(
+          ctx,
+          `Missing emails. Usage: subrouter account order --provider ${provider} ${currentEmails.join(' ')}`,
+        )
+      }
+      const input = await clack.text({
+        message: `Rank every ${provider} email, comma separated`,
+        placeholder: currentEmails.join(', '),
+      })
+      if (typeof input !== 'string' || !input) exit(ctx, 0)
+      return input.split(',').map((entry) => entry.trim()).filter(Boolean)
+    })()
+    const ordered = await orderAccounts({ provider, emails: listed })
+    if (ordered instanceof Error) fail(ctx, ordered.message)
+    ctx.console.log(colors.green(`${adapters[provider].name} account order:`))
+    ordered.forEach((account, index) => {
+      ctx.console.log(`  ${index + 1}. ${accountLabel(account, index)}`)
+    })
   })
 
 // --- preset ---

@@ -209,3 +209,37 @@ describe('account status', () => {
     ])
   })
 })
+
+describe('account order', () => {
+  test('ranks every email for a provider', async () => {
+    await addAccount({
+      provider: 'anthropic',
+      account: { ...account, email: 'a@x.com', key: 'key-a' },
+    })
+    await addAccount({
+      provider: 'anthropic',
+      account: { ...account, email: 'b@x.com', key: 'key-b' },
+    })
+
+    const incomplete = await runCli('account', 'order', '--provider', 'anthropic', 'b@x.com')
+    expect(incomplete.code).toBe(1)
+    expect(incomplete.stderr).toContain('a@x.com')
+    expect(incomplete.stderr).toContain('b@x.com')
+    expect((await loadAccounts()).providers.anthropic?.accounts.map((item) => item.email)).toEqual([
+      'a@x.com',
+      'b@x.com',
+    ])
+
+    const missingProvider = await runCli('account', 'order', 'b@x.com', 'a@x.com')
+    expect(missingProvider.code).toBe(1)
+    expect(missingProvider.stderr).toContain('--provider')
+
+    const result = await runCli('account', 'order', '--provider', 'anthropic', 'b@x.com', 'a@x.com')
+    expect(result.code).toBe(0)
+    expect(result.stdout).toContain('b@x.com')
+    expect((await loadAccounts()).providers.anthropic?.accounts.map((item) => item.email)).toEqual([
+      'b@x.com',
+      'a@x.com',
+    ])
+  })
+})
