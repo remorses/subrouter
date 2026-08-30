@@ -96,6 +96,24 @@ describe('destructive commands', () => {
   })
 })
 
+describe('login', () => {
+  test('without a provider fails in agent mode with usage', async () => {
+    const result = await runCli('login')
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('Missing provider')
+    expect(result.stderr).toContain('anthropic')
+    expect(result.stderr).toContain('openai')
+  })
+})
+
+describe('logout', () => {
+  test('without a provider fails in agent mode with usage', async () => {
+    const result = await runCli('logout')
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('Missing provider')
+  })
+})
+
 describe('account status', () => {
   test(
     'tracks concurrent login jobs independently by provider',

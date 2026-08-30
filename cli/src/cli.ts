@@ -84,7 +84,7 @@ async function pickProvider({
     message: prompt,
     options: PROVIDER_IDS.map((id) => ({ value: id, label: adapters[id].name })),
   })
-  if (typeof choice === 'symbol') exit(ctx, 0)
+  if (clack.isCancel(choice)) exit(ctx, 0)
   return choice
 }
 
@@ -101,7 +101,37 @@ async function pickOpenAIMethod(
       { value: 'device' as const, label: 'Device code', hint: 'may be disabled for your account' },
     ],
   })
-  if (typeof choice === 'symbol') exit(ctx, 0)
+  if (clack.isCancel(choice)) exit(ctx, 0)
+  return choice
+}
+
+async function pickPresetName({
+  provided,
+  ctx,
+  missing,
+  prompt,
+}: {
+  provided: string | undefined
+  ctx: GokeExecutionContext
+  missing: string
+  prompt: string
+}) {
+  if (provided) return provided
+  if (isAgent || !process.stdin.isTTY) fail(ctx, missing)
+  const presets = await loadPresets()
+  const names = [
+    DEFAULT_PRESET_NAME,
+    ...Object.keys(presets.presets).filter((name) => name !== DEFAULT_PRESET_NAME),
+  ]
+  const choice = await clack.select({
+    message: prompt,
+    options: names.map((name) => ({
+      value: name,
+      label: name,
+      hint: name === DEFAULT_PRESET_NAME && !presets.presets[name] ? 'builtin' : undefined,
+    })),
+  })
+  if (clack.isCancel(choice)) exit(ctx, 0)
   return choice
 }
 
@@ -217,104 +247,133 @@ function loginDescription(id: ProviderId) {
   `
 }
 
+const loginMethodOption = [
+  '--method [method]',
+  z.enum(['browser', 'device']).optional().describe('OpenAI login method: browser or device'),
+] as const
+const loginInputOption = [
+  '--input [input]',
+  z.string().optional().describe('Redirect URL or subscription key for non-interactive login'),
+] as const
+
+async function runProviderLogin({
+  id,
+  options,
+  ctx,
+}: {
+  id: ProviderId
+  options: { method?: 'browser' | 'device'; input?: string }
+  ctx: GokeExecutionContext
+}) {
+  const requestedMethod = options.method
+  if (requestedMethod && id !== 'openai') {
+    fail(ctx, '`--method` is only supported for OpenAI login')
+  }
+  const method = id === 'openai' ? await pickOpenAIMethod(requestedMethod, ctx) : undefined
+  const input = options.input || undefined
+  if (
+    input &&
+    (id === 'xai' || id === 'github-copilot' || (id === 'openai' && method === 'device'))
+  ) {
+    fail(ctx, `\`--input\` is not supported for ${id} device login`)
+  }
+
+  if (ctx.daemon.isDaemon) {
+    const account = await completeLogin({ id, method, background: true, ctx })
+    if (account instanceof Error) {
+      await saveLoginState({ provider: id, status: 'error', error: account.message })
+      fail(ctx, account.message)
+    }
+    await addAccount({ provider: id, account })
+    return
+  }
+
+  const manualOAuth =
+    (id === 'anthropic' || id === 'poe' || (id === 'openai' && method === 'browser')) &&
+    Boolean(ctx.process.env.SUBROUTER_MANUAL_OAUTH)
+  const requiresInput = CODE_LOGIN_PROVIDERS.has(id) || manualOAuth
+  if ((isAgent || !process.stdin.isTTY) && requiresInput && !input) {
+    fail(ctx, `Missing --input. Usage: subrouter login ${id} --input <value>`)
+  }
+
+  if ((isAgent || !process.stdin.isTTY) && !input) {
+    await clearLoginState(id)
+    await ctx.daemon.forCommand(loginDaemonName(id)).start({ timeoutMs: LOGIN_TIMEOUT_MS })
+    const state = await waitForLoginState(id, ctx)
+    if (state.status === 'error') fail(ctx, state.error ?? 'Login failed')
+    if (state.instructions) ctx.console.error(state.instructions)
+    // Instructions then URL, the same order `account status` uses. Printing
+    // the URL here is the whole point of a background login: the person
+    // reading a chat window has no other way to reach it.
+    if (state.url) {
+      ctx.console.error(state.url)
+      if (shouldOpenLoginBrowser(id) && process.stdin.isTTY) await openInBrowser(state.url)
+    }
+    ctx.console.log(
+      `Login running in background. After approving, verify with: subrouter account status ${id}`,
+    )
+    return
+  }
+
+  const account = await completeLogin({ id, method, input, background: false, ctx })
+  if (account instanceof Error) fail(ctx, account.message)
+  await addAccount({ provider: id, account })
+  ctx.console.log(colors.green(`Logged in to ${adapters[id].name} as ${accountLabel(account)}`))
+}
+
+cli
+  .command('login [provider]', 'Log in to a subscription. Omit the provider to pick one interactively.')
+  .example('subrouter login')
+  .example('subrouter login anthropic')
+  .option(...loginMethodOption)
+  .option(...loginInputOption)
+  .action(async (provider, options, ctx) => {
+    const id = await pickProvider({ provided: provider, ctx })
+    await runProviderLogin({ id, options, ctx })
+  })
+
 for (const id of PROVIDER_IDS) {
   cli
     .command(`login ${id}`, loginDescription(id))
     .example(`subrouter login ${id}`)
-    .option(
-      '--method [method]',
-      z.enum(['browser', 'device']).optional().describe('OpenAI login method: browser or device'),
-    )
-    .option(
-      '--input [input]',
-      z.string().optional().describe('Redirect URL or subscription key for non-interactive login'),
-    )
+    .option(...loginMethodOption)
+    .option(...loginInputOption)
     .action(async (options, ctx) => {
-      const requestedMethod = options.method || undefined
-      if (requestedMethod && id !== 'openai') {
-        fail(ctx, '`--method` is only supported for OpenAI login')
-      }
-      const method = id === 'openai' ? await pickOpenAIMethod(requestedMethod, ctx) : undefined
-      const input = options.input || undefined
-      if (
-        input &&
-        (id === 'xai' || id === 'github-copilot' || (id === 'openai' && method === 'device'))
-      ) {
-        fail(ctx, `\`--input\` is not supported for ${id} device login`)
-      }
-
-      if (ctx.daemon.isDaemon) {
-        const account = await completeLogin({ id, method, background: true, ctx })
-        if (account instanceof Error) {
-          await saveLoginState({ provider: id, status: 'error', error: account.message })
-          fail(ctx, account.message)
-        }
-        await addAccount({ provider: id, account })
-        return
-      }
-
-      const manualOAuth =
-        (id === 'anthropic' || id === 'poe' || (id === 'openai' && method === 'browser')) &&
-        Boolean(ctx.process.env.SUBROUTER_MANUAL_OAUTH)
-      const requiresInput = CODE_LOGIN_PROVIDERS.has(id) || manualOAuth
-      if ((isAgent || !process.stdin.isTTY) && requiresInput && !input) {
-        fail(ctx, `Missing --input. Usage: subrouter login ${id} --input <value>`)
-      }
-
-      if ((isAgent || !process.stdin.isTTY) && !input) {
-        await clearLoginState(id)
-        await ctx.daemon.start({ timeoutMs: LOGIN_TIMEOUT_MS })
-        const state = await waitForLoginState(id, ctx)
-        if (state.status === 'error') fail(ctx, state.error ?? 'Login failed')
-        if (state.instructions) ctx.console.error(state.instructions)
-        // Instructions then URL, the same order `account status` uses. Printing
-        // the URL here is the whole point of a background login: the person
-        // reading a chat window has no other way to reach it.
-        if (state.url) {
-          ctx.console.error(state.url)
-          if (shouldOpenLoginBrowser(id) && process.stdin.isTTY) await openInBrowser(state.url)
-        }
-        ctx.console.log(
-          `Login running in background. After approving, verify with: subrouter account status ${id}`,
-        )
-        return
-      }
-
-      const account = await completeLogin({ id, method, input, background: false, ctx })
-      if (account instanceof Error) fail(ctx, account.message)
-      await addAccount({ provider: id, account })
-      ctx.console.log(colors.green(`Logged in to ${adapters[id].name} as ${accountLabel(account)}`))
+      await runProviderLogin({ id, options, ctx })
     })
 }
 
 cli
-  .command('logout <provider>', 'Remove all stored accounts for a provider')
+  .command('logout [provider]', 'Remove all stored accounts for a provider')
   .option('--force', 'Skip confirmation')
   .example('subrouter logout anthropic')
   .action(async (provider, options, ctx) => {
-    if (!isProviderId(provider)) {
-      fail(ctx, `Unknown provider ${provider}. Valid providers: ${PROVIDER_IDS.join(', ')}`)
-    }
+    const id = await pickProvider({
+      provided: provider,
+      ctx,
+      missing: `Missing provider. Usage: subrouter logout <${PROVIDER_IDS.join('|')}>`,
+      prompt: 'Which subscription do you want to remove?',
+    })
     const accounts = await loadAccounts()
-    const pool = accounts.providers[provider]
+    const pool = accounts.providers[id]
     const count = pool?.accounts.length ?? 0
     if (count > 0) {
       await confirmDestructive({
         force: Boolean(options.force),
-        message: `Remove all ${count} account(s) for ${provider}?`,
+        message: `Remove all ${count} account(s) for ${id}?`,
         nonInteractiveMessage: 'Use --force to remove all accounts non-interactively',
         ctx,
       })
     }
-    await ctx.daemon.forCommand(loginDaemonName(provider)).stop()
-    await clearLoginState(provider)
+    await ctx.daemon.forCommand(loginDaemonName(id)).stop()
+    await clearLoginState(id)
     for (let i = count - 1; i >= 0; i--) {
-      const removed = await removeAccount({ provider, index: i })
+      const removed = await removeAccount({ provider: id, index: i })
       if (removed instanceof Error) {
         ctx.console.error(colors.yellow(removed.message))
       }
     }
-    ctx.console.log(`Removed ${count} account(s) for ${provider}`)
+    ctx.console.log(`Removed ${count} account(s) for ${id}`)
   })
 
 // --- account ---
@@ -402,35 +461,54 @@ cli
   })
 
 cli
-  .command('account remove <provider> <indexOrEmail>', 'Remove one account from a provider pool')
+  .command('account remove [provider] [indexOrEmail]', 'Remove one account from a provider pool')
   .option('--force', 'Skip confirmation')
   .example('subrouter account remove anthropic 2')
   .example('subrouter account remove openai me@example.com')
   .action(async (provider, indexOrEmail, options, ctx) => {
-    if (!isProviderId(provider)) {
-      fail(ctx, `Unknown provider ${provider}. Valid providers: ${PROVIDER_IDS.join(', ')}`)
-    }
+    const id = await pickProvider({
+      provided: provider,
+      ctx,
+      missing: `Missing provider. Usage: subrouter account remove <${PROVIDER_IDS.join('|')}> <n|email>`,
+      prompt: 'Which provider account do you want to remove?',
+    })
     const accounts = await loadAccounts()
-    const pool = accounts.providers[provider]
-    const index = (() => {
-      const asNumber = Number(indexOrEmail)
-      if (Number.isInteger(asNumber) && asNumber >= 1) return asNumber - 1
-      const found = pool?.accounts.findIndex(
-        (account) => account.email?.toLowerCase() === indexOrEmail.toLowerCase(),
-      )
-      return found ?? -1
+    const pool = accounts.providers[id]
+    const index = await (async () => {
+      if (indexOrEmail) {
+        const asNumber = Number(indexOrEmail)
+        if (Number.isInteger(asNumber) && asNumber >= 1) return asNumber - 1
+        return (
+          pool?.accounts.findIndex(
+            (account) => account.email?.toLowerCase() === indexOrEmail.toLowerCase(),
+          ) ?? -1
+        )
+      }
+      if (isAgent || !process.stdin.isTTY) {
+        fail(ctx, `Missing account. Usage: subrouter account remove ${id} <n|email>`)
+      }
+      if (!pool || pool.accounts.length === 0) fail(ctx, `No accounts for ${id}`)
+      const choice = await clack.select({
+        message: `Which ${id} account do you want to remove?`,
+        options: pool.accounts.map((account, accountIndex) => ({
+          value: accountIndex,
+          label: accountLabel(account, accountIndex),
+        })),
+      })
+      if (clack.isCancel(choice)) exit(ctx, 0)
+      return choice
     })()
     const target = pool?.accounts[index]
-    if (!target) fail(ctx, `Account ${indexOrEmail} does not exist for ${provider}`)
+    if (!target) fail(ctx, `Account ${indexOrEmail ?? index} does not exist for ${id}`)
     await confirmDestructive({
       force: Boolean(options.force),
-      message: `Remove ${provider} account ${accountLabel(target)}?`,
+      message: `Remove ${id} account ${accountLabel(target)}?`,
       nonInteractiveMessage: 'Use --force to remove an account non-interactively',
       ctx,
     })
-    const removed = await removeAccount({ provider, index })
+    const removed = await removeAccount({ provider: id, index })
     if (removed instanceof Error) fail(ctx, removed.message)
-    ctx.console.log(`Removed ${provider} account ${accountLabel(removed)}`)
+    ctx.console.log(`Removed ${id} account ${accountLabel(removed)}`)
   })
 
 cli
@@ -477,7 +555,7 @@ cli
         message: `Rank every ${provider} email, comma separated`,
         placeholder: currentEmails.join(', '),
       })
-      if (typeof input !== 'string' || !input) exit(ctx, 0)
+      if (clack.isCancel(input) || !input) exit(ctx, 0)
       return input.split(',').map((entry) => entry.trim()).filter(Boolean)
     })()
     const ordered = await orderAccounts({ provider, emails: listed })
@@ -513,7 +591,7 @@ cli
         message: 'Ranked provider/model entries, comma separated',
         placeholder: 'anthropic/claude-opus-4-6,openai/gpt-5.5,xai/grok-4.6',
       })
-      if (typeof input !== 'string' || !input) exit(ctx, 0)
+      if (clack.isCancel(input) || !input) exit(ctx, 0)
       return input
     })()
     const models = parsePresetModels(raw, ctx)
@@ -552,8 +630,15 @@ cli.command('preset list', 'List presets, including the builtin default').action
 })
 
 cli
-  .command('preset show <name>', 'Show one preset and its current usable candidates')
+  .command('preset show [name]', 'Show one preset and its current usable candidates')
+  .example('subrouter preset show work')
   .action(async (name, _options, ctx) => {
+    name = await pickPresetName({
+      provided: name,
+      ctx,
+      missing: 'Missing name. Usage: subrouter preset show <name>',
+      prompt: 'Which preset do you want to show?',
+    })
     const models = await resolvePresetModels(name)
     if (models instanceof Error) fail(ctx, models.message)
     ctx.console.log(colors.bold(name))
@@ -572,9 +657,16 @@ cli
   })
 
 cli
-  .command('preset remove <name>', 'Delete a preset')
+  .command('preset remove [name]', 'Delete a preset')
   .option('--force', 'Skip confirmation')
+  .example('subrouter preset remove work')
   .action(async (name, options, ctx) => {
+    name = await pickPresetName({
+      provided: name,
+      ctx,
+      missing: 'Missing name. Usage: subrouter preset remove <name>',
+      prompt: 'Which preset do you want to remove?',
+    })
     if (!(await loadPresets()).presets[name]) fail(ctx, `Preset ${name} does not exist`)
     await confirmDestructive({
       force: Boolean(options.force),

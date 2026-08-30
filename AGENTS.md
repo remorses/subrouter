@@ -130,7 +130,7 @@ Rate-limit state lives in `~/.subrouter/config.json`, shared by every process an
 
 Adapters expose `beginLogin()` returning a `LoginSession`, not a blocking `login()`. Harnesses that cannot sit on a TTY (opencode's auth hook, and through it a Discord bot) need to show `url` + `instructions` immediately and finish later. `runLogin()` in `adapters/index.ts` is the blocking wrapper the CLI uses; never reintroduce a blocking `login` on the adapter interface.
 
-The CLI registers one `login <provider>` command and keeps each background attempt in `config.json` under `logins.<provider>`, so different providers can log in concurrently. Every successful harness path calls `addAccount()`, which clears that provider's login state. Keep this invalidation centralized in the store; otherwise an old CLI error can mask a later harness login.
+The CLI registers `login [provider]` plus one `login <provider>` command per provider so background attempts keep separate daemon PIDs. Login state lives in `config.json` under `logins.<provider>`, so different providers can log in concurrently. Every successful harness path calls `addAccount()`, which clears that provider's login state. Keep this invalidation centralized in the store; otherwise an old CLI error can mask a later harness login.
 
 Two contracts to protect:
 
