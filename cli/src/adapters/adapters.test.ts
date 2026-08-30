@@ -2,13 +2,15 @@ import { createServer } from 'node:http'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test } from 'vitest'
 import {
   classifyFailure,
   isPermanentRefreshFailure,
   loadModelsDevCatalog,
+  logSubrouter,
   modelsDevLimit,
   parseModelsDevCatalog,
+  setSubrouterLog,
   validateModelsDevModelIds,
 } from './index.ts'
 import { rewriteRequestPayload } from './anthropic.ts'
@@ -61,7 +63,41 @@ describe('classifyFailure', () => {
     expect(
       classifyFailure({
         statusCode: 429,
+        headers: { 'retry-after': 'not-a-number' },
+        message: 'rate limited',
+      }),
+    ).toEqual({ rotate: true, cooldownMs: 5 * 60 * 1000 })
+  })
+
+  test('429 honors retry-after 0 and a past HTTP date', () => {
+    expect(
+      classifyFailure({
+        statusCode: 429,
+        headers: { 'retry-after': '0' },
+        message: 'rate limited',
+      }),
+    ).toEqual({ rotate: true, cooldownMs: 0 })
+    expect(
+      classifyFailure({
+        statusCode: 429,
+        headers: { 'retry-after-ms': '0' },
+        message: 'rate limited',
+      }),
+    ).toEqual({ rotate: true, cooldownMs: 0 })
+    expect(
+      classifyFailure({
+        statusCode: 429,
         headers: { 'retry-after': new Date(Date.now() - 5_000).toUTCString() },
+        message: 'rate limited',
+      }),
+    ).toEqual({ rotate: true, cooldownMs: 0 })
+  })
+
+  test('429 ignores a negative retry-after', () => {
+    expect(
+      classifyFailure({
+        statusCode: 429,
+        headers: { 'retry-after': '-1' },
         message: 'rate limited',
       }),
     ).toEqual({ rotate: true, cooldownMs: 5 * 60 * 1000 })
@@ -91,6 +127,29 @@ describe('classifyFailure', () => {
     expect(quota?.rotate).toBe(true)
     expect(quota!.cooldownMs).toBeGreaterThanOrEqual(6 * 60 * 60 * 1000)
     expect(classifyFailure({ message: 'something else' })).toBeNull()
+  })
+})
+
+describe('logSubrouter', () => {
+  afterEach(() => {
+    setSubrouterLog(undefined)
+  })
+
+  test('swallows a rejecting async sink without an unhandled rejection', async () => {
+    const unhandled: Error[] = []
+    function onUnhandled(reason: Error) {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    setSubrouterLog(async () => {
+      throw new Error('log transport failed')
+    })
+    logSubrouter({ level: 'info', message: 'trying' })
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20)
+    })
+    process.off('unhandledRejection', onUnhandled)
+    expect(unhandled).toEqual([])
   })
 })
 

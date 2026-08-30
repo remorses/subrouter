@@ -11,7 +11,13 @@ import { colors, goke, isAgent, openInBrowser, type GokeExecutionContext } from 
 import { createRequire } from 'node:module'
 import { z } from 'zod'
 import dedent from 'string-dedent'
-import { adapters, loadModelsDevCatalog, runLogin, validateModelsDevModelIds } from './adapters/index.ts'
+import {
+  adapters,
+  loadModelsDevCatalog,
+  runLogin,
+  setSubrouterLog,
+  validateModelsDevModelIds,
+} from './adapters/index.ts'
 import { builtinDefaultPreset, DEFAULT_PRESET_NAME, resolveCandidates, resolvePresetModels } from './router.ts'
 import {
   accountLabel,
@@ -38,6 +44,14 @@ const require = createRequire(import.meta.url)
 const packageJson = require('../package.json') as { version: string }
 
 export const cli = goke('subrouter')
+
+cli.use((_options, ctx) => {
+  setSubrouterLog((entry) => {
+    if (entry.level === 'error') ctx.console.error(entry.message)
+    else if (entry.level === 'warn') ctx.console.warn(entry.message)
+    else ctx.console.log(entry.message)
+  })
+})
 
 const CODE_LOGIN_PROVIDERS = new Set<ProviderId>(['opencode-go', 'minimax', 'kimi', 'zai', 'alibaba'])
 

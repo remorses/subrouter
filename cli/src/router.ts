@@ -497,6 +497,8 @@ function candidateCallOptions({
 export function createSubrouter(
   options: { onEvent?: (event: RouterEvent) => void; log?: SubrouterLog } = {},
 ) {
+  // Process-wide on purpose. OpenCode loads this factory from a second
+  // @subrouter/cli import; setSubrouterLog is the shared sink.
   if (options.log) setSubrouterLog(options.log)
   return {
     languageModel(presetName: string) {

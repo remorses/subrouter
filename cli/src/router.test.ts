@@ -212,6 +212,31 @@ describe('RouterModel failover', () => {
     })
   })
 
+  test('persists a short retry-after as the account cooldown', async () => {
+    const anthropicMock = await startMockServer(() => ({
+      ...anthropic429,
+      headers: { 'retry-after': '12' },
+    }))
+    const opencodeMock = await startMockServer(() => chatCompletionOk('hello from fallback'))
+    servers = [anthropicMock, opencodeMock]
+    process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    const before = Date.now()
+    await new RouterModel({ preset: 'test' }).doGenerate(callOptions)
+    const until = (await loadState()).cooldowns['anthropic:a@x.com']
+    expect(until).toBeTruthy()
+    expect(until! - before).toBeGreaterThan(5_000)
+    expect(until! - before).toBeLessThan(13_000)
+  })
+
   test('skips cooled-down accounts on the next call', async () => {
     const anthropicMock = await startMockServer(() => anthropic429)
     const opencodeMock = await startMockServer(() => chatCompletionOk('again'))

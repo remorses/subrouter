@@ -330,6 +330,8 @@ function streamPreset({
           continue
         }
         if (event.type === 'error') {
+          // Pi only calls onResponse after a successful HTTP response. A 429
+          // rejects inside the native provider, so retry-after is not here.
           const action = classifyFailure({
             statusCode: response?.status,
             headers: response?.headers,

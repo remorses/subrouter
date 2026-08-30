@@ -51,9 +51,12 @@ export type SubrouterLogEntry = {
   extra?: SubrouterLogExtra
 }
 
-export type SubrouterLog = (entry: SubrouterLogEntry) => void
+export type SubrouterLog = (entry: SubrouterLogEntry) => void | Promise<void>
 
-const LOG_KEY = '__SUBROUTER_LOG__'
+// OpenCode loads the plugin and the provider as two imports of @subrouter/cli.
+// A module-local variable would not be shared. Symbol.for is the process-wide
+// key both copies can see, without putting a string on globalThis.
+const LOG_KEY = Symbol.for('@subrouter/cli/log')
 
 export function setSubrouterLog(log: SubrouterLog | undefined) {
   if (log) Reflect.set(globalThis, LOG_KEY, log)
@@ -61,15 +64,11 @@ export function setSubrouterLog(log: SubrouterLog | undefined) {
 }
 
 export function logSubrouter(entry: SubrouterLogEntry) {
-  const log: SubrouterLog | undefined = (() => {
-    const value = Reflect.get(globalThis, LOG_KEY)
-    return typeof value === 'function' ? value : undefined
-  })()
-  try {
-    log?.(entry)
-  } catch {
+  const value = Reflect.get(globalThis, LOG_KEY)
+  if (typeof value !== 'function') return
+  void Promise.resolve(value(entry)).catch(() => {
     // Logging must never break routing. Harnesses own the sink.
-  }
+  })
 }
 
 export type LoginArgs = {
@@ -475,21 +474,22 @@ function retryAfterMs(headers: Record<string, string> | undefined) {
   const millisRaw = headerValue(headers, 'retry-after-ms')
   if (millisRaw) {
     const millis = Number(millisRaw)
-    if (Number.isFinite(millis) && millis > 0) return millis
+    if (Number.isFinite(millis) && millis >= 0) return millis
   }
   const raw = headerValue(headers, 'retry-after')
   if (!raw) return undefined
   const seconds = Number(raw)
-  if (Number.isFinite(seconds) && seconds > 0) return seconds * 1000
+  if (raw.trim() !== '' && Number.isFinite(seconds)) {
+    if (seconds >= 0) return seconds * 1000
+    return undefined
+  }
   const date = Date.parse(raw)
-  if (Number.isFinite(date)) return Math.max(0, date - Date.now())
-  return undefined
+  if (!Number.isFinite(date)) return undefined
+  return Math.max(0, date - Date.now())
 }
 
 function rotateCooldownMs(headers: Record<string, string> | undefined) {
-  const fromHeader = retryAfterMs(headers)
-  if (fromHeader === undefined || fromHeader <= 0) return DEFAULT_COOLDOWN_MS
-  return fromHeader
+  return retryAfterMs(headers) ?? DEFAULT_COOLDOWN_MS
 }
 
 /**
