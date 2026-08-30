@@ -9,6 +9,8 @@
  * (globally, in ~/.subrouter/config.json) and the next candidate is tried.
  * Cooling-down-only failures throw a retryable 429 so OpenCode waits
  * instead of dying. It only throws a hard error when nothing can be retried.
+ * Cycle logs go through setSubrouterLog, never stdout. OpenCode wires that
+ * to client.app.log. Pi has no log API, so those runs stay silent.
  */
 
 import type {
@@ -19,7 +21,14 @@ import type {
 } from '@ai-sdk/provider'
 import { APICallError } from '@ai-sdk/provider'
 import * as errore from 'errore'
-import { adapters, classifyFailure, failureDetailsFromError } from './adapters/index.ts'
+import {
+  adapters,
+  classifyFailure,
+  failureDetailsFromError,
+  logSubrouter,
+  setSubrouterLog,
+  type SubrouterLog,
+} from './adapters/index.ts'
 import {
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
@@ -182,16 +191,46 @@ export function formatCandidateRef(candidate: Pick<Candidate, 'provider' | 'mode
   return `${candidate.provider}/${candidate.modelId}`
 }
 
+export type RouterEvent =
+  | { type: 'trying'; candidate: Candidate }
+  | { type: 'failover'; candidate: Candidate; error: Error; cooldownMs: number }
+
+function formatCandidateLog(candidate: Candidate) {
+  return `${formatCandidateRef(candidate)} ${accountLabel(candidate.account, candidate.accountIndex)}`
+}
+
+export function logRouterEvent(event: RouterEvent) {
+  const extra = {
+    provider: event.candidate.provider,
+    modelId: event.candidate.modelId,
+    account: accountLabel(event.candidate.account),
+    accountIndex: event.candidate.accountIndex,
+  }
+  if (event.type === 'trying') {
+    logSubrouter({
+      level: 'info',
+      message: `trying ${formatCandidateLog(event.candidate)}`,
+      extra,
+    })
+    return
+  }
+  logSubrouter({
+    level: 'warn',
+    message: `failover ${formatCandidateLog(event.candidate)}`,
+    extra: {
+      ...extra,
+      error: event.error.message,
+      cooldownMs: event.cooldownMs,
+    },
+  })
+}
+
 export async function resolveActiveCandidate(preset: string) {
   const presetModels = await resolvePresetModels(preset)
   if (presetModels instanceof Error) return null
   const { candidates } = await resolveCandidates({ presetModels })
   return candidates[0] ?? null
 }
-
-export type RouterEvent =
-  | { type: 'trying'; candidate: Candidate }
-  | { type: 'failover'; candidate: Candidate; error: Error; cooldownMs: number }
 
 type Attempt<T> = { ok: true; value: T } | { ok: false; error: Error }
 
@@ -239,6 +278,9 @@ export class RouterModel implements LanguageModelV3 {
     if (presetModels instanceof Error) throw presetModels
 
     const { candidates, skipped, retryAfterMs } = await resolveCandidates({ presetModels })
+    for (const reason of skipped) {
+      logSubrouter({ level: 'info', message: `skip ${reason}` })
+    }
     if (candidates.length === 0) {
       const reason = skipped.length > 0 ? skipped.join('; ') : 'no providers configured'
       const error = new NoUsableAccountError({ preset: this.modelId, reason })
@@ -251,7 +293,9 @@ export class RouterModel implements LanguageModelV3 {
     const attempts: string[] = []
     let soonestRetryAfterMs: number | undefined
     for (const candidate of candidates) {
-      this.onEvent?.({ type: 'trying', candidate })
+      const trying = { type: 'trying' as const, candidate }
+      this.onEvent?.(trying)
+      logRouterEvent(trying)
       const model = this.buildModel(candidate)
       const result = await Promise.resolve()
         .then(() => run(model, candidate))
@@ -288,7 +332,9 @@ export class RouterModel implements LanguageModelV3 {
         soonestRetryAfterMs === undefined
           ? action.cooldownMs
           : Math.min(soonestRetryAfterMs, action.cooldownMs)
-      this.onEvent?.({ type: 'failover', candidate, error, cooldownMs: action.cooldownMs })
+      const failover = { type: 'failover' as const, candidate, error, cooldownMs: action.cooldownMs }
+      this.onEvent?.(failover)
+      logRouterEvent(failover)
       attempts.push(
         `${candidate.provider}/${candidate.modelId} ${accountLabel(candidate.account, candidate.accountIndex)}: ${error.message}`,
       )
@@ -448,7 +494,10 @@ function candidateCallOptions({
  * AI SDK provider factory. OpenCode imports the provider module and calls the
  * first export starting with `create`, then `sdk.languageModel(modelId)`.
  */
-export function createSubrouter(options: { onEvent?: (event: RouterEvent) => void } = {}) {
+export function createSubrouter(
+  options: { onEvent?: (event: RouterEvent) => void; log?: SubrouterLog } = {},
+) {
+  if (options.log) setSubrouterLog(options.log)
   return {
     languageModel(presetName: string) {
       return new RouterModel({ preset: presetName, onEvent: options.onEvent })

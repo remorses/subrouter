@@ -34,6 +34,44 @@ import { xaiAdapter } from './xai.ts'
 
 export type PersistTokens = (update: Partial<StoredAccount>) => Promise<void>
 
+export type SubrouterLogLevel = 'debug' | 'info' | 'warn' | 'error'
+
+export type SubrouterLogExtra = {
+  provider?: string
+  modelId?: string
+  account?: string
+  accountIndex?: number
+  error?: string
+  cooldownMs?: number
+}
+
+export type SubrouterLogEntry = {
+  level: SubrouterLogLevel
+  message: string
+  extra?: SubrouterLogExtra
+}
+
+export type SubrouterLog = (entry: SubrouterLogEntry) => void
+
+const LOG_KEY = '__SUBROUTER_LOG__'
+
+export function setSubrouterLog(log: SubrouterLog | undefined) {
+  if (log) Reflect.set(globalThis, LOG_KEY, log)
+  else Reflect.deleteProperty(globalThis, LOG_KEY)
+}
+
+export function logSubrouter(entry: SubrouterLogEntry) {
+  const log: SubrouterLog | undefined = (() => {
+    const value = Reflect.get(globalThis, LOG_KEY)
+    return typeof value === 'function' ? value : undefined
+  })()
+  try {
+    log?.(entry)
+  } catch {
+    // Logging must never break routing. Harnesses own the sink.
+  }
+}
+
 export type LoginArgs = {
   /** log progress (auth URL, user code) to the user */
   log: (message: string) => void
@@ -295,7 +333,7 @@ export async function loadModelsDevCatalog() {
     payload: trimmed,
   }).catch((cause) => new ModelsDevError({ reason: 'cache write failed', cause }))
   if (cachedWrite instanceof Error) {
-    console.warn(cachedWrite.message)
+    logSubrouter({ level: 'warn', message: cachedWrite.message })
   }
   return parseModelsDevCatalog(trimmed)
 }

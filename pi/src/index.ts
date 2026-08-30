@@ -24,6 +24,8 @@ import {
   classifyFailure,
   DEFAULT_PRESET_NAME,
   formatCandidateRef,
+  logRouterEvent,
+  logSubrouter,
   isProviderId,
   loadAccounts,
   loadPresets,
@@ -269,11 +271,15 @@ function streamPreset({
     }
 
     const attempts: string[] = []
+    for (const reason of skipped) {
+      logSubrouter({ level: 'info', message: `skip ${reason}` })
+    }
     candidateLoop: for (const candidate of candidates) {
       if (options?.signal?.aborted) {
         endWithError({ stream, model, error: new Error('Request was aborted'), aborted: true })
         return
       }
+      logRouterEvent({ type: 'trying', candidate })
 
       const target = targetModel({ candidate, providers })
       if (!target) {
@@ -296,6 +302,7 @@ function streamPreset({
           return
         }
         await recordCooldown({ candidate, cooldownMs: action.cooldownMs })
+        logRouterEvent({ type: 'failover', candidate, error: apiKey, cooldownMs: action.cooldownMs })
         attempts.push(`${candidate.provider}/${candidate.modelId}: ${apiKey.message}`)
         continue
       }
@@ -330,6 +337,8 @@ function streamPreset({
           })
           if (action) await recordCooldown({ candidate, cooldownMs: action.cooldownMs })
           if (action && !committed) {
+            const error = new Error(event.error.errorMessage ?? 'Provider request failed')
+            logRouterEvent({ type: 'failover', candidate, error, cooldownMs: action.cooldownMs })
             attempts.push(
               `${candidate.provider}/${candidate.modelId} ${accountLabel(candidate.account, candidate.accountIndex)}: ${event.error.errorMessage ?? 'Provider request failed'}`,
             )

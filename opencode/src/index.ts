@@ -31,6 +31,7 @@ import {
   PROVIDER_ID,
   PROVIDER_IDS,
   resolveActiveCandidate,
+  setSubrouterLog,
   type StoredAccount,
 } from '@subrouter/cli'
 import { addSubrouterHeaders, revealRoutedModel } from './provider.ts'
@@ -40,7 +41,24 @@ function providerEntryUrl() {
   return new URL(isDev ? './provider.ts' : './provider.js', import.meta.url).href
 }
 
-export const subrouterPlugin: Plugin = async () => {
+export const subrouterPlugin: Plugin = async ({ client }) => {
+  // OpenCode loads this plugin and the provider module separately. Both import
+  // @subrouter/cli; this callback is the only log sink the router may use.
+  // Never console.log here. OpenCode prints plugin logs via client.app.log.
+  if (client?.app?.log) {
+    setSubrouterLog((entry) => {
+      void client.app
+        .log({
+          body: {
+            service: 'subrouter',
+            level: entry.level,
+            message: entry.message,
+            extra: entry.extra,
+          },
+        })
+        .catch(() => {})
+    })
+  }
   return {
     config: async (config) => {
       const presets = await loadPresets().catch(() => {

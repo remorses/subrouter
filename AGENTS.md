@@ -140,6 +140,16 @@ Two contracts to protect:
 
 `cancel()` releases anything the session holds, which for anthropic is a listening callback server on port 53692. Call it on any abandoned flow.
 
+## OpenCode source
+
+When you need to see how OpenCode plugins, logging, retries, or provider loading work, read the OpenCode repo. Do not guess from memory.
+
+- GitHub: https://github.com/anomalyco/opencode
+- Local cache: `bunx opensrc path anomalyco/opencode`
+- Plugin logging: https://opencode.ai/docs/plugins/#logging (`client.app.log`, never `console.log`)
+- Retry headers: https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/retry.ts
+- Provider factory load: `packages/opencode/src/provider/provider.ts` calls the first export starting with `create`
+
 ## AI SDK version pinning
 
 `@ai-sdk/*` and `@ai-sdk/provider` versions are pinned to match what opencode bundles (provider spec `LanguageModelV3`). When bumping, check opencode's `packages/opencode/package.json` first; a spec mismatch breaks model loading inside opencode.

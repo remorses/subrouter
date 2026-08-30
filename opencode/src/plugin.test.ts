@@ -4,7 +4,15 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
-import { addAccount, adapters, loadAccounts, PROVIDER_DISPLAY_NAME, PROVIDER_IDS, savePreset } from '@subrouter/cli'
+import {
+  addAccount,
+  adapters,
+  loadAccounts,
+  PROVIDER_DISPLAY_NAME,
+  PROVIDER_IDS,
+  savePreset,
+  setSubrouterLog,
+} from '@subrouter/cli'
 import { subrouterAuthPlugin, subrouterPlugin } from './index.ts'
 import { revealRoutedModel, rewritePoweredByModelLine } from './provider.ts'
 
@@ -19,6 +27,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  setSubrouterLog(undefined)
   delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_OPENAI_ISSUER_URL
   delete process.env.SUBROUTER_MODELS_DEV_URL

@@ -18,6 +18,7 @@ import {
   resolveCandidates,
   RouterModel,
 } from './router.ts'
+import { setSubrouterLog, type SubrouterLogEntry } from './adapters/index.ts'
 import { addAccount, loadState, markCooldown, savePreset, type StoredAccount } from './store.ts'
 
 type MockResponse = { status: number; headers?: Record<string, string>; body: string }
@@ -121,6 +122,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  setSubrouterLog(undefined)
   delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_ANTHROPIC_BASE_URL
   delete process.env.SUBROUTER_OPENCODE_GO_BASE_URL
@@ -174,6 +176,40 @@ describe('RouterModel failover', () => {
     // Both anthropic accounts are now cooling down globally
     const state = await loadState()
     expect(Object.keys(state.cooldowns).sort()).toEqual(['anthropic:a@x.com', 'anthropic:b@x.com'])
+  })
+
+  test('logs trying and failover through the harness callback', async () => {
+    const anthropicMock = await startMockServer(() => anthropic429)
+    const opencodeMock = await startMockServer(() => chatCompletionOk('hello from fallback'))
+    servers = [anthropicMock, opencodeMock]
+    process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com', refresh: 'r1', access: 'acc1' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    const logs: SubrouterLogEntry[] = []
+    setSubrouterLog((entry) => {
+      logs.push(entry)
+    })
+    const model = new RouterModel({ preset: 'test' })
+    await model.doGenerate(callOptions)
+    expect(logs.map((entry) => `${entry.level} ${entry.message}`)).toMatchInlineSnapshot(`
+      [
+        "info trying anthropic/claude-fake #1 (a@x.com)",
+        "warn failover anthropic/claude-fake #1 (a@x.com)",
+        "info trying opencode-go/fake-model #1 (API key)",
+      ]
+    `)
+    expect(logs[1]?.extra).toMatchObject({
+      provider: 'anthropic',
+      modelId: 'claude-fake',
+      account: 'a@x.com',
+    })
   })
 
   test('skips cooled-down accounts on the next call', async () => {
