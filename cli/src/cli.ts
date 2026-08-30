@@ -17,21 +17,21 @@ import {
   accountLabel,
   addAccount,
   clearCooldowns,
+  clearLoginState,
   cooldownKey,
   isProviderId,
-  loginStatePath,
   loadAccounts,
+  loadLoginState,
   loadPresets,
   loadState,
   orderAccounts,
   PROVIDER_IDS,
-  readJson,
   removeAccount,
   removePreset,
+  saveLoginState,
   savePreset,
   type LoginState,
   type ProviderId,
-  writeJson,
 } from './store.ts'
 
 const require = createRequire(import.meta.url)
@@ -141,14 +141,10 @@ async function confirmDestructive({
   if (clack.isCancel(confirmed) || !confirmed) exit(ctx, 0)
 }
 
-async function writeLoginState(state: LoginState) {
-  await writeJson(loginStatePath(state.provider), state)
-}
-
 async function waitForLoginState(provider: ProviderId, ctx: GokeExecutionContext) {
   const deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
-    const state = await readJson<LoginState | null>(loginStatePath(provider), null)
+    const state = await loadLoginState(provider)
     if (state) return state
     await new Promise((resolve) => setTimeout(resolve, 100))
   }
@@ -176,7 +172,7 @@ async function completeLogin({
     },
     openUrl: async (url, session) => {
       if (background) {
-        await writeLoginState({
+        await saveLoginState({
           provider: id,
           status: 'pending',
           instructions: session.instructions,
@@ -250,7 +246,7 @@ for (const id of PROVIDER_IDS) {
       if (ctx.daemon.isDaemon) {
         const account = await completeLogin({ id, method, background: true, ctx })
         if (account instanceof Error) {
-          await writeLoginState({ provider: id, status: 'error', error: account.message })
+          await saveLoginState({ provider: id, status: 'error', error: account.message })
           fail(ctx, account.message)
         }
         await addAccount({ provider: id, account })
@@ -266,7 +262,7 @@ for (const id of PROVIDER_IDS) {
       }
 
       if ((isAgent || !process.stdin.isTTY) && !input) {
-        await ctx.fs.rm(loginStatePath(id), { force: true })
+        await clearLoginState(id)
         await ctx.daemon.start({ timeoutMs: LOGIN_TIMEOUT_MS })
         const state = await waitForLoginState(id, ctx)
         if (state.status === 'error') fail(ctx, state.error ?? 'Login failed')
@@ -311,7 +307,7 @@ cli
       })
     }
     await ctx.daemon.forCommand(loginDaemonName(provider)).stop()
-    await ctx.fs.rm(loginStatePath(provider), { force: true })
+    await clearLoginState(provider)
     for (let i = count - 1; i >= 0; i--) {
       const removed = await removeAccount({ provider, index: i })
       if (removed instanceof Error) {
@@ -381,8 +377,8 @@ cli
     // The login state is checked before the stored accounts on purpose. Counting
     // accounts first reported success for a login that never finished, because
     // the expired account the user was replacing was still on disk. Every login
-    // path clears this file once it stores an account.
-    const state = await readJson<LoginState | null>(loginStatePath(id), null)
+    // path clears this entry once it stores an account.
+    const state = await loadLoginState(id)
     if (state?.provider === id && state.status === 'pending') {
       if (await ctx.daemon.forCommand(loginDaemonName(id)).isRunning()) {
         ctx.console.error(`Login to ${id} is in progress.`)
@@ -390,7 +386,7 @@ cli
         if (state.url) ctx.console.error(state.url)
         exit(ctx, 1)
       }
-      await ctx.fs.rm(loginStatePath(id), { force: true })
+      await clearLoginState(id)
       ctx.console.error(colors.yellow(`Login to ${id} stopped before it finished.`))
     }
     if (state?.provider === id && state.status === 'error') {

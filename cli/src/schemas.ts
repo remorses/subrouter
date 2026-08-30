@@ -1,5 +1,5 @@
 /**
- * Zod schemas for ~/.subrouter JSON files. Compiled to JSON Schema and
+ * Zod schema for ~/.subrouter/config.json. Compiled to JSON Schema and
  * served at subrouter.org so editors and agents can autocomplete.
  */
 
@@ -19,11 +19,7 @@ export const PROVIDER_IDS = [
 ] as const
 export type ProviderId = (typeof PROVIDER_IDS)[number]
 
-export const SCHEMA_ORIGIN = 'https://subrouter.org'
-export const ACCOUNTS_SCHEMA_URL = `${SCHEMA_ORIGIN}/accounts.json`
-export const PRESETS_SCHEMA_URL = `${SCHEMA_ORIGIN}/presets.json`
-export const STATE_SCHEMA_URL = `${SCHEMA_ORIGIN}/state.json`
-export const LOGIN_SCHEMA_URL = `${SCHEMA_ORIGIN}/login.json`
+export const SCHEMA_URL = 'https://subrouter.org/schema.json'
 
 const providerIdSchema = z.enum(PROVIDER_IDS).describe('Subscription provider id')
 
@@ -48,74 +44,71 @@ export const providerAccountsSchema = z
   })
   .describe('Account pool for one provider')
 
-export const accountsFileSchema = z
-  .object({
-    $schema: z.string().optional().describe('JSON Schema URL for editor autocomplete'),
-    version: z.literal(1),
-    providers: z
-      .object({
-        anthropic: providerAccountsSchema.optional(),
-        openai: providerAccountsSchema.optional(),
-        xai: providerAccountsSchema.optional(),
-        'opencode-go': providerAccountsSchema.optional(),
-        'github-copilot': providerAccountsSchema.optional(),
-        poe: providerAccountsSchema.optional(),
-        minimax: providerAccountsSchema.optional(),
-        kimi: providerAccountsSchema.optional(),
-        zai: providerAccountsSchema.optional(),
-        alibaba: providerAccountsSchema.optional(),
-      })
-      .describe('Logged-in accounts grouped by provider'),
-  })
-  .describe('~/.subrouter/accounts.json')
-
-export const presetsFileSchema = z
-  .object({
-    $schema: z.string().optional().describe('JSON Schema URL for editor autocomplete'),
-    version: z.literal(1),
-    presets: z
-      .record(z.string(), z.array(z.string()).describe('Ranked provider/model entries such as anthropic/claude-opus-4-6'))
-      .describe('Named presets. Each value is the failover order for that preset'),
-  })
-  .describe('~/.subrouter/presets.json')
-
-export const stateFileSchema = z
-  .object({
-    $schema: z.string().optional().describe('JSON Schema URL for editor autocomplete'),
-    version: z.literal(1),
-    cooldowns: z
-      .record(z.string(), z.number())
-      .describe('Map of provider:accountKey to epoch milliseconds until the account is usable again'),
-  })
-  .describe('~/.subrouter/state.json')
-
 export const loginStateSchema = z
   .object({
-    $schema: z.string().optional().describe('JSON Schema URL for editor autocomplete'),
     provider: providerIdSchema,
     status: z.enum(['pending', 'error']).describe('pending while a login daemon waits, error after a failed attempt'),
     instructions: z.string().optional().describe('Human instructions, including device codes as code: XXXX-XXXX'),
     url: z.string().optional().describe('Authorize URL to open in a browser'),
     error: z.string().optional().describe('Failure message when status is error'),
   })
-  .describe('~/.subrouter/login-<provider>.json')
+  .describe('In-progress or failed login for one provider')
+
+const providersSchema = z
+  .object({
+    anthropic: providerAccountsSchema.optional(),
+    openai: providerAccountsSchema.optional(),
+    xai: providerAccountsSchema.optional(),
+    'opencode-go': providerAccountsSchema.optional(),
+    'github-copilot': providerAccountsSchema.optional(),
+    poe: providerAccountsSchema.optional(),
+    minimax: providerAccountsSchema.optional(),
+    kimi: providerAccountsSchema.optional(),
+    zai: providerAccountsSchema.optional(),
+    alibaba: providerAccountsSchema.optional(),
+  })
+  .describe('Logged-in accounts grouped by provider')
+
+const loginsSchema = z
+  .object({
+    anthropic: loginStateSchema.optional(),
+    openai: loginStateSchema.optional(),
+    xai: loginStateSchema.optional(),
+    'opencode-go': loginStateSchema.optional(),
+    'github-copilot': loginStateSchema.optional(),
+    poe: loginStateSchema.optional(),
+    minimax: loginStateSchema.optional(),
+    kimi: loginStateSchema.optional(),
+    zai: loginStateSchema.optional(),
+    alibaba: loginStateSchema.optional(),
+  })
+  .describe('Background login attempts, one per provider')
+
+export const configFileSchema = z
+  .object({
+    $schema: z.string().optional().describe('JSON Schema URL for editor autocomplete'),
+    version: z.literal(1),
+    providers: providersSchema,
+    presets: z
+      .record(z.string(), z.array(z.string()).describe('Ranked provider/model entries such as anthropic/claude-opus-4-6'))
+      .describe('Named presets. Each value is the failover order for that preset'),
+    cooldowns: z
+      .record(z.string(), z.number())
+      .describe('Map of provider:accountKey to epoch milliseconds until the account is usable again'),
+    logins: loginsSchema,
+  })
+  .describe('~/.subrouter/config.json')
 
 export type StoredAccount = z.infer<typeof storedAccountSchema>
 export type ProviderAccounts = z.infer<typeof providerAccountsSchema>
-export type AccountsFile = z.infer<typeof accountsFileSchema>
-export type PresetsFile = z.infer<typeof presetsFileSchema>
-export type StateFile = z.infer<typeof stateFileSchema>
 export type LoginState = z.infer<typeof loginStateSchema>
+export type ConfigFile = z.infer<typeof configFileSchema>
+export type AccountsFile = { version: 1; providers: ConfigFile['providers'] }
+export type PresetsFile = { version: 1; presets: ConfigFile['presets'] }
+export type StateFile = { version: 1; cooldowns: ConfigFile['cooldowns'] }
 
-function toDraft7(schema: z.ZodType) {
-  return z.toJSONSchema(schema, {
-    target: 'draft-7',
-    io: 'input',
-    unrepresentable: 'any',
-  })
-}
-
-export const accountsJsonSchema = toDraft7(accountsFileSchema)
-export const presetsJsonSchema = toDraft7(presetsFileSchema)
-export const stateJsonSchema = toDraft7(stateFileSchema)
-export const loginJsonSchema = toDraft7(loginStateSchema)
+export const configJsonSchema = z.toJSONSchema(configFileSchema, {
+  target: 'draft-7',
+  io: 'input',
+  unrepresentable: 'any',
+})

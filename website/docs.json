@@ -48,6 +48,6 @@
       }
     ]
   },
-  "knownPaths": ["/accounts.json", "/presets.json", "/state.json", "/login.json"],
+  "knownPaths": ["/schema.json"],
   "decorativeLines": "none"
 }

@@ -13,7 +13,7 @@
 import { createOpencodeClient, type Event } from '@opencode-ai/sdk'
 import { createOpencodeServer } from '@opencode-ai/sdk/server'
 import { createServer, type Server } from 'node:http'
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -21,6 +21,8 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import {
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
+  addAccount,
+  markCooldown,
 } from '@subrouter/cli'
 import { addSubrouterHeaders } from './provider.ts'
 
@@ -171,32 +173,6 @@ beforeAll(async () => {
   // Subrouter state: one rate-limited anthropic account + one zen key
   const subrouterHome = path.join(home, 'subrouter')
   await mkdir(subrouterHome, { recursive: true })
-  await writeFile(
-    path.join(subrouterHome, 'accounts.json'),
-    JSON.stringify({
-      version: 1,
-      providers: {
-        anthropic: {
-          activeIndex: 0,
-          accounts: [
-            {
-              type: 'oauth',
-              refresh: 'fake-refresh',
-              access: 'fake-access',
-              expires: Date.now() + 1_000_000_000,
-              email: 'a@x.com',
-              addedAt: 1,
-              lastUsed: 1,
-            },
-          ],
-        },
-        'opencode-go': {
-          activeIndex: 0,
-          accounts: [{ type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 }],
-        },
-      },
-    }),
-  )
 
   for (const [key, value] of Object.entries({
     SUBROUTER_HOME: subrouterHome,
@@ -211,6 +187,23 @@ beforeAll(async () => {
     savedEnv[key] = process.env[key]
     process.env[key] = value
   }
+
+  await addAccount({
+    provider: 'anthropic',
+    account: {
+      type: 'oauth',
+      refresh: 'fake-refresh',
+      access: 'fake-access',
+      expires: Date.now() + 1_000_000_000,
+      email: 'a@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await addAccount({
+    provider: 'opencode-go',
+    account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+  })
 
   const providerEntry = pathToFileURL(
     path.join(import.meta.dirname, '..', 'dist', 'provider.js'),
@@ -308,16 +301,16 @@ describe('opencode + subrouter provider', () => {
 
   test('all cooling-down accounts retry through opencode instead of dying', async () => {
     const untilMs = Date.now() + 2_000
-    await writeFile(
-      path.join(process.env.SUBROUTER_HOME!, 'state.json'),
-      JSON.stringify({
-        version: 1,
-        cooldowns: {
-          'anthropic:a@x.com': untilMs,
-          'opencode-go:zen-key': untilMs,
-        },
-      }),
-    )
+    await markCooldown({
+      provider: 'anthropic',
+      account: { type: 'oauth', refresh: 'fake-refresh', access: 'fake-access', email: 'a@x.com', addedAt: 1, lastUsed: 1 },
+      untilMs,
+    })
+    await markCooldown({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+      untilMs,
+    })
 
     const client = createOpencodeClient({ baseUrl: server.url })
     const events: Event[] = []

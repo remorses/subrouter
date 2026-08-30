@@ -37,7 +37,7 @@ Subrouter deliberately avoids that translation matrix. Reusing the harness's pro
 pnpm workspace, flat `./*` packages. **One root README only, no per-package READMEs.**
 
 - `cli/` — npm package `@subrouter/cli`. Everything lives here:
-  - `src/store.ts` — accounts, presets, cooldown state under `~/.subrouter` (override: `SUBROUTER_HOME`). JSON files, 0600, lock-dir locking.
+  - `src/store.ts` — accounts, presets, cooldown, and login state in `~/.subrouter/config.json` (override: `SUBROUTER_HOME`). JSON, 0600, lock-dir locking.
   - `src/adapters/` — one adapter per provider (login flow, token refresh, fetch wrapper, `createModel`). Shared failure classification in `adapters/index.ts`.
   - `src/router.ts` — `RouterModel` (AI SDK `LanguageModelV3`) + `createSubrouter` provider factory. Resolves a preset to ranked candidates, skips cooldowns, fails over on rotate-worthy errors.
   - `src/cli.ts` — goke CLI (`login`, `logout`, `account`, `preset`, `status`, `cooldown clear`).
@@ -118,7 +118,7 @@ Users never hand-edit config files. All state is created through the CLI (`subro
 
 ## Cooldowns are global machine scope
 
-Rate-limit state lives in `~/.subrouter/state.json`, shared by every process and harness on the machine, so a rate-limited subscription is not retried per-session. Never shorten an existing cooldown. 429 honors `retry-after` (min 5 minutes); 402 (balance exhausted) cools down 6 hours.
+Rate-limit state lives in `~/.subrouter/config.json`, shared by every process and harness on the machine, so a rate-limited subscription is not retried per-session. Never shorten an existing cooldown. 429 honors `retry-after` (min 5 minutes); 402 (balance exhausted) cools down 6 hours.
 
 ## Harness plugins
 
@@ -130,7 +130,7 @@ Rate-limit state lives in `~/.subrouter/state.json`, shared by every process and
 
 Adapters expose `beginLogin()` returning a `LoginSession`, not a blocking `login()`. Harnesses that cannot sit on a TTY (opencode's auth hook, and through it a Discord bot) need to show `url` + `instructions` immediately and finish later. `runLogin()` in `adapters/index.ts` is the blocking wrapper the CLI uses; never reintroduce a blocking `login` on the adapter interface.
 
-The CLI registers one `login <provider>` command and keeps each background attempt in `~/.subrouter/login-<provider>.json`, so different providers can log in concurrently. Every successful harness path calls `addAccount()`, which clears that provider's login state. Keep this invalidation centralized in the store; otherwise an old CLI error can mask a later harness login.
+The CLI registers one `login <provider>` command and keeps each background attempt in `config.json` under `logins.<provider>`, so different providers can log in concurrently. Every successful harness path calls `addAccount()`, which clears that provider's login state. Keep this invalidation centralized in the store; otherwise an old CLI error can mask a later harness login.
 
 Two contracts to protect:
 

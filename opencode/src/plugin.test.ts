@@ -1,10 +1,10 @@
 import { createServer, type Server } from 'node:http'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
-import { addAccount, adapters, loadAccounts, PROVIDER_DISPLAY_NAME, PROVIDER_IDS } from '@subrouter/cli'
+import { addAccount, adapters, loadAccounts, PROVIDER_DISPLAY_NAME, PROVIDER_IDS, savePreset } from '@subrouter/cli'
 import { subrouterAuthPlugin, subrouterPlugin } from './index.ts'
 import { revealRoutedModel, rewritePoweredByModelLine } from './provider.ts'
 
@@ -118,10 +118,7 @@ function authMethod() {
 }
 
 test('config hook registers the subrouter provider with preset models', async () => {
-  await writeFile(
-    path.join(home, 'presets.json'),
-    JSON.stringify({ version: 1, presets: { work: ['anthropic/claude-opus-4-6'] } }),
-  )
+  await savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })
 
   const hooks = await subrouterPlugin(pluginInput)
   const config: Record<string, any> = {}
@@ -153,10 +150,7 @@ test('preset model names show the first live candidate', async () => {
       lastUsed: 1,
     },
   })
-  await writeFile(
-    path.join(home, 'presets.json'),
-    JSON.stringify({ version: 1, presets: { work: ['anthropic/claude-opus-4-6'] } }),
-  )
+  await savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })
 
   const hooks = await subrouterPlugin(pluginInput)
   const config: Config = {}
@@ -192,10 +186,7 @@ test('preset model limits follow the first live candidate', async () => {
       lastUsed: 1,
     },
   })
-  await writeFile(
-    path.join(home, 'presets.json'),
-    JSON.stringify({ version: 1, presets: { work: [`anthropic/${modelId}`] } }),
-  )
+  await savePreset({ name: 'work', models: [`anthropic/${modelId}`] })
 
   const hooks = await subrouterPlugin(pluginInput)
   const config: Config = {}

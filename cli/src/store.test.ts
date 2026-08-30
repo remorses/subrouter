@@ -6,29 +6,24 @@ import {
   accountKey,
   accountLabel,
   addAccount,
+  configFilePath,
   cooldownKey,
   isCoolingDown,
-  loginStatePath,
   loadAccounts,
+  loadLoginState,
   loadPresets,
   loadState,
   markCooldown,
   orderAccounts,
   removeAccount,
   removePreset,
+  saveLoginState,
   savePreset,
   updateAccount,
   writeJson,
   type StoredAccount,
 } from './store.ts'
-import {
-  ACCOUNTS_SCHEMA_URL,
-  LOGIN_SCHEMA_URL,
-  accountsJsonSchema,
-  loginJsonSchema,
-  presetsJsonSchema,
-  stateJsonSchema,
-} from './schemas.ts'
+import { configJsonSchema, SCHEMA_URL } from './schemas.ts'
 
 let home: string
 
@@ -113,55 +108,26 @@ describe('JSON persistence', () => {
 })
 
 describe('accounts', () => {
-  test('JSON schemas expose the config fields', () => {
-    expect({
-      accounts: Object.keys(accountsJsonSchema.properties ?? {}),
-      presets: Object.keys(presetsJsonSchema.properties ?? {}),
-      state: Object.keys(stateJsonSchema.properties ?? {}),
-      login: Object.keys(loginJsonSchema.properties ?? {}),
-    }).toMatchInlineSnapshot(`
-      {
-        "accounts": [
-          "$schema",
-          "version",
-          "providers",
-        ],
-        "login": [
-          "$schema",
-          "provider",
-          "status",
-          "instructions",
-          "url",
-          "error",
-        ],
-        "presets": [
-          "$schema",
-          "version",
-          "presets",
-        ],
-        "state": [
-          "$schema",
-          "version",
-          "cooldowns",
-        ],
-      }
+  test('JSON schema exposes the config fields', () => {
+    expect(Object.keys(configJsonSchema.properties ?? {})).toMatchInlineSnapshot(`
+      [
+        "$schema",
+        "version",
+        "providers",
+        "presets",
+        "cooldowns",
+        "logins",
+      ]
     `)
   })
 
-  test('writes $schema on known config files', async () => {
+  test('writes $schema on config.json', async () => {
     await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
-    await writeJson(loginStatePath('anthropic'), {
-      provider: 'anthropic',
-      status: 'pending',
-    })
-
-    expect(JSON.parse(await readFile(path.join(home, 'accounts.json'), 'utf8')).$schema).toBe(ACCOUNTS_SCHEMA_URL)
-    expect(JSON.parse(await readFile(loginStatePath('anthropic'), 'utf8')).$schema).toBe(LOGIN_SCHEMA_URL)
+    expect(JSON.parse(await readFile(configFilePath(), 'utf8')).$schema).toBe(SCHEMA_URL)
   })
 
   test('adding an account clears the provider login state', async () => {
-    const loginPath = loginStatePath('anthropic')
-    await writeJson(loginPath, {
+    await saveLoginState({
       provider: 'anthropic',
       status: 'error',
       error: 'earlier login failed',
@@ -169,7 +135,7 @@ describe('accounts', () => {
 
     await addAccount({ provider: 'anthropic', account: oauthAccount() })
 
-    await expect(stat(loginPath)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect(await loadLoginState('anthropic')).toBeNull()
   })
 
   test('add, upsert and remove accounts', async () => {

@@ -6,7 +6,7 @@
  * (provider/model plus one entry per logged-in account), skips accounts in
  * cooldown, and delegates to the first usable underlying model. When a call
  * fails with a rate-limit/usage error, the account is put in cooldown
- * (globally, in ~/.subrouter/state.json) and the next candidate is tried.
+ * (globally, in ~/.subrouter/config.json) and the next candidate is tried.
  * Cooling-down-only failures throw a retryable 429 so OpenCode waits
  * instead of dying. It only throws a hard error when nothing can be retried.
  */

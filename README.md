@@ -112,11 +112,11 @@ A preset is an ordered list of `provider/model` candidates. Subrouter walks that
 
 ### Accounts
 
-Accounts live in `~/.subrouter/accounts.json`. Log in **multiple times to the same provider** to build a rotation pool.
+Accounts live in `~/.subrouter/config.json`. Log in **multiple times to the same provider** to build a rotation pool.
 
 ### Cooldowns
 
-Cooldowns are **global per machine** (`~/.subrouter/state.json`). Once an account is rate limited, every session and every harness skips it until the cooldown expires.
+Cooldowns are **global per machine** (`~/.subrouter/config.json`). Once an account is rate limited, every session and every harness skips it until the cooldown expires.
 
 | Response                | Cooldown                                |
 | ----------------------- | --------------------------------------- |
@@ -201,12 +201,7 @@ npx @subrouter/cli account order --provider anthropic work@x.com personal@x.com
 
 `account order` sets the fallback order inside one provider. Pass **every** account email. The first email is tried first.
 
-Local JSON files under `~/.subrouter` include a `$schema` URL so editors can autocomplete fields:
-
-- [accounts.json](https://subrouter.org/accounts.json)
-- [presets.json](https://subrouter.org/presets.json)
-- [state.json](https://subrouter.org/state.json)
-- [login.json](https://subrouter.org/login.json)
+State lives in **`~/.subrouter/config.json`**. The file includes a `$schema` URL so editors can autocomplete fields: [schema.json](https://subrouter.org/schema.json).
 
 ### Presets
 

@@ -1,11 +1,11 @@
 /**
  * Subrouter local state: accounts, login attempts, presets and cooldowns.
  *
- * Everything lives under ~/.subrouter (override with SUBROUTER_HOME, used by
- * tests). Files are atomically replaced JSON with 0600 permissions and a lock
- * directory for cross-process safety. The cooldown state is global on purpose:
- * when a subscription hits a rate limit, every process and harness on the
- * machine should stop retrying it until the cooldown expires.
+ * Everything lives in ~/.subrouter/config.json (override with SUBROUTER_HOME,
+ * used by tests). The file is atomically replaced JSON with 0600 permissions
+ * and a lock directory for cross-process safety. Cooldown state is global on
+ * purpose: when a subscription hits a rate limit, every process and harness
+ * on the machine should stop retrying it until the cooldown expires.
  */
 
 import * as errore from 'errore'
@@ -14,12 +14,10 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  ACCOUNTS_SCHEMA_URL,
-  LOGIN_SCHEMA_URL,
-  PRESETS_SCHEMA_URL,
   PROVIDER_IDS,
-  STATE_SCHEMA_URL,
+  SCHEMA_URL,
   type AccountsFile,
+  type ConfigFile,
   type LoginState,
   type PresetsFile,
   type ProviderAccounts,
@@ -31,6 +29,7 @@ import {
 export {
   PROVIDER_IDS,
   type AccountsFile,
+  type ConfigFile,
   type LoginState,
   type PresetsFile,
   type ProviderAccounts,
@@ -55,20 +54,8 @@ export function subrouterHome() {
   return path.join(os.homedir(), '.subrouter')
 }
 
-export function accountsFilePath() {
-  return path.join(subrouterHome(), 'accounts.json')
-}
-
-export function presetsFilePath() {
-  return path.join(subrouterHome(), 'presets.json')
-}
-
-export function stateFilePath() {
-  return path.join(subrouterHome(), 'state.json')
-}
-
-export function loginStatePath(provider: ProviderId) {
-  return path.join(subrouterHome(), `login-${provider}.json`)
+export function configFilePath() {
+  return path.join(subrouterHome(), 'config.json')
 }
 
 // --- JSON I/O ---
@@ -81,15 +68,6 @@ export async function readJson<T>(filePath: string, fallback: T): Promise<T> {
   return parsed
 }
 
-function schemaUrlFor(filePath: string) {
-  const name = path.basename(filePath)
-  if (name === 'accounts.json') return ACCOUNTS_SCHEMA_URL
-  if (name === 'presets.json') return PRESETS_SCHEMA_URL
-  if (name === 'state.json') return STATE_SCHEMA_URL
-  if (name.startsWith('login-') && name.endsWith('.json')) return LOGIN_SCHEMA_URL
-  return null
-}
-
 export async function writeJson(filePath: string, value: object) {
   const directory = path.dirname(filePath)
   const temporaryPath = path.join(
@@ -97,8 +75,7 @@ export async function writeJson(filePath: string, value: object) {
     `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
   )
   await fs.mkdir(directory, { recursive: true })
-  const schema = schemaUrlFor(filePath)
-  const payload = schema ? { $schema: schema, ...value } : value
+  const payload = path.basename(filePath) === 'config.json' ? { $schema: SCHEMA_URL, ...value } : value
 
   try {
     const temporaryFile = await fs.open(temporaryPath, 'wx', 0o600)
@@ -165,7 +142,7 @@ export async function withStoreLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-// --- Accounts ---
+// --- Config ---
 
 function normalizeProviderAccounts(input: Partial<ProviderAccounts> | undefined): ProviderAccounts {
   const accounts = Array.isArray(input?.accounts)
@@ -184,19 +161,79 @@ function normalizeProviderAccounts(input: Partial<ProviderAccounts> | undefined)
   return { activeIndex, accounts }
 }
 
-export async function loadAccounts(): Promise<AccountsFile> {
-  const raw = await readJson<Partial<AccountsFile> | null>(accountsFilePath(), null)
-  const providers: AccountsFile['providers'] = {}
+function normalizeProviders(input: Partial<ConfigFile['providers']> | undefined): ConfigFile['providers'] {
+  const providers: ConfigFile['providers'] = {}
   for (const id of PROVIDER_IDS) {
-    const entry = raw?.providers?.[id]
+    const entry = input?.[id]
     if (!entry) continue
     providers[id] = normalizeProviderAccounts(entry)
   }
-  return { version: 1, providers }
+  return providers
+}
+
+function normalizePresets(input: Partial<ConfigFile['presets']> | undefined): ConfigFile['presets'] {
+  const presets: ConfigFile['presets'] = {}
+  for (const [name, models] of Object.entries(input ?? {})) {
+    if (!Array.isArray(models)) continue
+    presets[name] = models.filter((entry) => typeof entry === 'string' && entry.includes('/'))
+  }
+  return presets
+}
+
+function normalizeCooldowns(input: Partial<ConfigFile['cooldowns']> | undefined, now = Date.now()) {
+  const cooldowns: ConfigFile['cooldowns'] = {}
+  for (const [key, until] of Object.entries(input ?? {})) {
+    if (typeof until !== 'number') continue
+    if (until <= now) continue
+    cooldowns[key] = until
+  }
+  return cooldowns
+}
+
+function normalizeLogins(input: Partial<ConfigFile['logins']> | undefined): ConfigFile['logins'] {
+  const logins: ConfigFile['logins'] = {}
+  for (const id of PROVIDER_IDS) {
+    const entry = input?.[id]
+    if (!entry || typeof entry !== 'object') continue
+    if (entry.status !== 'pending' && entry.status !== 'error') continue
+    logins[id] = { ...entry, provider: id }
+  }
+  return logins
+}
+
+function normalizeConfig(raw: Partial<ConfigFile> | null): ConfigFile {
+  return {
+    version: 1,
+    providers: normalizeProviders(raw?.providers),
+    presets: normalizePresets(raw?.presets),
+    cooldowns: normalizeCooldowns(raw?.cooldowns),
+    logins: normalizeLogins(raw?.logins),
+  }
+}
+
+async function loadConfigUnlocked(): Promise<ConfigFile> {
+  return normalizeConfig(await readJson<Partial<ConfigFile> | null>(configFilePath(), null))
+}
+
+async function saveConfigUnlocked(file: ConfigFile) {
+  await writeJson(configFilePath(), {
+    version: 1,
+    providers: file.providers,
+    presets: file.presets,
+    cooldowns: file.cooldowns,
+    logins: file.logins,
+  })
+}
+
+export async function loadAccounts(): Promise<AccountsFile> {
+  const config = await loadConfigUnlocked()
+  return { version: 1, providers: config.providers }
 }
 
 export async function saveAccounts(file: AccountsFile) {
-  await writeJson(accountsFilePath(), file)
+  const config = await loadConfigUnlocked()
+  config.providers = file.providers
+  await saveConfigUnlocked(config)
 }
 
 /** Stable identity key for an account, used for cooldowns and dedupe. */
@@ -247,15 +284,13 @@ export async function addAccount({
   account: StoredAccount
 }) {
   await withStoreLock(async () => {
-    const file = await loadAccounts()
-    const pool = file.providers[provider] ?? { activeIndex: 0, accounts: [] }
+    const config = await loadConfigUnlocked()
+    const pool = config.providers[provider] ?? { activeIndex: 0, accounts: [] }
     upsertAccount(pool, account)
-    file.providers[provider] = pool
-    await saveAccounts(file)
+    config.providers[provider] = pool
+    delete config.logins[provider]
+    await saveConfigUnlocked(config)
   })
-  // Every harness stores successful logins through this function. Clearing the
-  // state here prevents an older CLI error from masking a later harness login.
-  await fs.rm(loginStatePath(provider), { force: true })
 }
 
 /** Persist updated tokens for an existing account (after a refresh). */
@@ -269,8 +304,8 @@ export async function updateAccount({
   update: Partial<StoredAccount>
 }) {
   await withStoreLock(async () => {
-    const file = await loadAccounts()
-    const pool = file.providers[provider]
+    const config = await loadConfigUnlocked()
+    const pool = config.providers[provider]
     if (!pool) return
     const key = accountKey(match)
     const index = pool.accounts.findIndex((existing) => {
@@ -281,7 +316,7 @@ export async function updateAccount({
     const existing = pool.accounts[index]
     if (!existing) return
     pool.accounts[index] = { ...existing, ...update, lastUsed: Date.now() }
-    await saveAccounts(file)
+    await saveConfigUnlocked(config)
   })
 }
 
@@ -293,15 +328,15 @@ export async function removeAccount({
   index: number
 }): Promise<StoreError | StoredAccount> {
   return withStoreLock(async () => {
-    const file = await loadAccounts()
-    const pool = file.providers[provider]
+    const config = await loadConfigUnlocked()
+    const pool = config.providers[provider]
     if (!pool || index < 0 || index >= pool.accounts.length) {
       return new StoreError({ reason: `account ${index + 1} does not exist for ${provider}` })
     }
     const [removed] = pool.accounts.splice(index, 1)
     if (pool.activeIndex > index) pool.activeIndex -= 1
     if (pool.activeIndex >= pool.accounts.length) pool.activeIndex = 0
-    await saveAccounts(file)
+    await saveConfigUnlocked(config)
     return removed!
   })
 }
@@ -323,8 +358,8 @@ export async function orderAccounts({
   emails: string[]
 }): Promise<StoreError | StoredAccount[]> {
   return withStoreLock(async () => {
-    const file = await loadAccounts()
-    const pool = file.providers[provider]
+    const config = await loadConfigUnlocked()
+    const pool = config.providers[provider]
     if (!pool || pool.accounts.length === 0) {
       return new StoreError({ reason: `no accounts for ${provider}. Run: subrouter login ${provider}` })
     }
@@ -352,52 +387,37 @@ export async function orderAccounts({
     }
     pool.accounts = wanted.map((email) => byEmail.get(email)!)
     pool.activeIndex = 0
-    await saveAccounts(file)
+    await saveConfigUnlocked(config)
     return pool.accounts
   })
 }
 
-// --- Presets ---
-
 export async function loadPresets(): Promise<PresetsFile> {
-  const raw = await readJson<Partial<PresetsFile> | null>(presetsFilePath(), null)
-  const presets: Record<string, string[]> = {}
-  for (const [name, models] of Object.entries(raw?.presets ?? {})) {
-    if (!Array.isArray(models)) continue
-    presets[name] = models.filter((entry) => typeof entry === 'string' && entry.includes('/'))
-  }
-  return { version: 1, presets }
+  const config = await loadConfigUnlocked()
+  return { version: 1, presets: config.presets }
 }
 
 export async function savePreset({ name, models }: { name: string; models: string[] }) {
   await withStoreLock(async () => {
-    const file = await loadPresets()
-    file.presets[name] = models
-    await writeJson(presetsFilePath(), file)
+    const config = await loadConfigUnlocked()
+    config.presets[name] = models
+    await saveConfigUnlocked(config)
   })
 }
 
 export async function removePreset(name: string): Promise<StoreError | null> {
   return withStoreLock(async () => {
-    const file = await loadPresets()
-    if (!file.presets[name]) return new StoreError({ reason: `preset ${name} does not exist` })
-    delete file.presets[name]
-    await writeJson(presetsFilePath(), file)
+    const config = await loadConfigUnlocked()
+    if (!config.presets[name]) return new StoreError({ reason: `preset ${name} does not exist` })
+    delete config.presets[name]
+    await saveConfigUnlocked(config)
     return null
   })
 }
 
-// --- Cooldowns ---
-
 export async function loadState(): Promise<StateFile> {
-  const raw = await readJson<Partial<StateFile> | null>(stateFilePath(), null)
-  const cooldowns: Record<string, number> = {}
-  for (const [key, until] of Object.entries(raw?.cooldowns ?? {})) {
-    if (typeof until !== 'number') continue
-    if (until <= Date.now()) continue
-    cooldowns[key] = until
-  }
-  return { version: 1, cooldowns }
+  const config = await loadConfigUnlocked()
+  return { version: 1, cooldowns: config.cooldowns }
 }
 
 export function cooldownKey({ provider, account }: { provider: ProviderId; account: StoredAccount }) {
@@ -414,18 +434,19 @@ export async function markCooldown({
   untilMs: number
 }) {
   await withStoreLock(async () => {
-    const state = await loadState()
+    const config = await loadConfigUnlocked()
     const key = cooldownKey({ provider, account })
-    const existing = state.cooldowns[key]
-    // Never shorten an existing cooldown
-    state.cooldowns[key] = Math.max(existing ?? 0, untilMs)
-    await writeJson(stateFilePath(), state)
+    const existing = config.cooldowns[key]
+    config.cooldowns[key] = Math.max(existing ?? 0, untilMs)
+    await saveConfigUnlocked(config)
   })
 }
 
 export async function clearCooldowns() {
   await withStoreLock(async () => {
-    await writeJson(stateFilePath(), { version: 1, cooldowns: {} } satisfies StateFile)
+    const config = await loadConfigUnlocked()
+    config.cooldowns = {}
+    await saveConfigUnlocked(config)
   })
 }
 
@@ -442,4 +463,25 @@ export function isCoolingDown({
 }) {
   const until = state.cooldowns[cooldownKey({ provider, account })]
   return typeof until === 'number' && until > now
+}
+
+export async function loadLoginState(provider: ProviderId): Promise<LoginState | null> {
+  const config = await loadConfigUnlocked()
+  return config.logins[provider] ?? null
+}
+
+export async function saveLoginState(state: LoginState) {
+  await withStoreLock(async () => {
+    const config = await loadConfigUnlocked()
+    config.logins[state.provider] = state
+    await saveConfigUnlocked(config)
+  })
+}
+
+export async function clearLoginState(provider: ProviderId) {
+  await withStoreLock(async () => {
+    const config = await loadConfigUnlocked()
+    delete config.logins[provider]
+    await saveConfigUnlocked(config)
+  })
 }

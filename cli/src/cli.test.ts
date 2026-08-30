@@ -9,14 +9,13 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import {
   addAccount,
   loadAccounts,
+  loadLoginState,
   loadPresets,
   loadState,
-  loginStatePath,
   markCooldown,
-  readJson,
+  saveLoginState,
   savePreset,
   type StoredAccount,
-  writeJson,
 } from './store.ts'
 
 const execFileAsync = promisify(execFile)
@@ -162,7 +161,7 @@ describe('account status', () => {
 
   test('a failed login stays visible until the next login succeeds', async () => {
     await addAccount({ provider: 'minimax', account })
-    await writeJson(path.join(home, 'login-minimax.json'), {
+    await saveLoginState({
       provider: 'minimax',
       status: 'error',
       error: 'MiniMax auth failed: timed out waiting for OAuth callback',
@@ -177,16 +176,15 @@ describe('account status', () => {
   })
 
   test('a dead login clears its pending state and falls through to stored accounts', async () => {
-    const loginPath = loginStatePath('anthropic')
     await addAccount({ provider: 'anthropic', account })
-    await writeJson(loginPath, { provider: 'anthropic', status: 'pending' })
+    await saveLoginState({ provider: 'anthropic', status: 'pending' })
 
     const status = await runCli('account', 'status', 'anthropic')
 
     expect(status.code).toBe(0)
     expect(status.stderr).toContain('Login to anthropic stopped before it finished.')
     expect(status.stdout).toContain('Logged in to anthropic with 1 account(s).')
-    expect(await readJson(loginPath, null)).toBeNull()
+    expect(await loadLoginState('anthropic')).toBeNull()
   })
 
   test('stores non-interactive key input without printing the secret', async () => {
