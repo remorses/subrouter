@@ -425,20 +425,51 @@ function codexEndpoint() {
   return CODEX_API_ENDPOINT
 }
 
+const ENCRYPTED_REASONING = 'reasoning.encrypted_content'
+
+/** @ai-sdk/openai defaults store to true and then emits item_reference ids. */
+export function withCodexProviderOptions<T extends { providerOptions?: { openai?: { store?: boolean } } }>(
+  options: T,
+): T {
+  return {
+    ...options,
+    providerOptions: {
+      ...options.providerOptions,
+      openai: { ...options.providerOptions?.openai, store: false },
+    },
+  }
+}
+
 /**
- * The Codex backend rejects requests unless `store` is false (it returns
- * `{"detail":"Store must be set to false"}`). opencode enforces this via
- * providerOptions at the harness level; we enforce it at the fetch layer so
- * subrouter works in any harness.
+ * Codex requires store:false. OpenCode applies the rest of this patch only
+ * when providerID is openai (strip reasoning item ids, request encrypted
+ * reasoning). Subrouter is providerID subrouter, so the same rules live here.
+ * Without them, follow-up turns send rs_* ids and Codex returns
+ * "Items are not persisted when store is set to false".
  */
-function patchCodexBody(body: string | undefined) {
+export function patchCodexBody(body: string | undefined) {
   if (typeof body !== 'string' || body.length === 0) return body
   const payload = errore.try((): JSONValue => JSON.parse(body))
   if (payload instanceof Error || !isJSONObject(payload)) return body
   payload.store = false
-  // Codex rejects max_output_tokens ("Unsupported parameter"); the Codex CLI
-  // never sends it and opencode drops it via chat.params for openai.
   delete payload.max_output_tokens
+  const include = Array.isArray(payload.include)
+    ? payload.include.filter((item) => typeof item === 'string')
+    : []
+  if (!include.includes(ENCRYPTED_REASONING)) include.push(ENCRYPTED_REASONING)
+  payload.include = include
+  if (Array.isArray(payload.input)) {
+    payload.input = payload.input.flatMap((item) => {
+      if (!isJSONObject(item)) return [item]
+      if (item.type === 'item_reference') return [item]
+      delete item.id
+      if (item.type !== 'reasoning') return [item]
+      if (typeof item.encrypted_content !== 'string' || item.encrypted_content.length === 0) {
+        return []
+      }
+      return [item]
+    })
+  }
   return JSON.stringify(payload)
 }
 

@@ -18,7 +18,7 @@ import {
   patchCopilotBody,
   shouldUseCopilotResponses,
 } from './github-copilot.ts'
-import { buildOpenAIAuthorizeUrl } from './openai.ts'
+import { buildOpenAIAuthorizeUrl, patchCodexBody, withCodexProviderOptions } from './openai.ts'
 import { buildPoeAuthorizeUrl, parsePoeCallbackInput } from './poe.ts'
 
 describe('classifyFailure', () => {
@@ -460,5 +460,63 @@ describe('anthropic request rewriting', () => {
     expect(payload.messages[0].content[0].name).toBe('Bash')
     expect(result.reverseToolNameMap.get('Bash')).toBe('bash')
     expect(result.modelId).toBe('claude-opus-4-6')
+  })
+})
+
+describe('patchCodexBody', () => {
+  test('forces store false, drops max_output_tokens, asks for encrypted reasoning', () => {
+    const patched = JSON.parse(
+      patchCodexBody(
+        JSON.stringify({
+          model: 'gpt-5.6-sol',
+          store: true,
+          max_output_tokens: 32000,
+          include: ['file_search_call.results'],
+        }),
+      )!,
+    )
+    expect(patched.store).toBe(false)
+    expect(patched.max_output_tokens).toBeUndefined()
+    expect(patched.include).toEqual(['file_search_call.results', 'reasoning.encrypted_content'])
+  })
+
+  test('strips stored item ids and drops reasoning without encrypted content', () => {
+    const patched = JSON.parse(
+      patchCodexBody(
+        JSON.stringify({
+          model: 'gpt-5.6-sol',
+          input: [
+            { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+            { type: 'reasoning', id: 'rs_dead', summary: [] },
+            {
+              type: 'reasoning',
+              id: 'rs_keep',
+              summary: [],
+              encrypted_content: 'enc',
+            },
+            {
+              type: 'function_call',
+              id: 'fc_dead',
+              call_id: 'call_1',
+              name: 'bash',
+              arguments: '{}',
+            },
+            { type: 'item_reference', id: 'fc_keep' },
+          ],
+        }),
+      )!,
+    )
+    expect(patched.input).toEqual([
+      { role: 'user', content: [{ type: 'input_text', text: 'hi' }] },
+      { type: 'reasoning', summary: [], encrypted_content: 'enc' },
+      { type: 'function_call', call_id: 'call_1', name: 'bash', arguments: '{}' },
+      { type: 'item_reference', id: 'fc_keep' },
+    ])
+  })
+
+  test('withCodexProviderOptions forces store false for the AI SDK', () => {
+    expect(withCodexProviderOptions({ providerOptions: { openai: { store: true } } })).toEqual({
+      providerOptions: { openai: { store: false } },
+    })
   })
 })
