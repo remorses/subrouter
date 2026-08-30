@@ -99,10 +99,10 @@ importers:
     devDependencies:
       '@earendil-works/pi-ai':
         specifier: 0.84.3
-        version: 0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)
+        version: 0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.5.1))(ws@8.21.3)(zod@4.5.1)
       '@earendil-works/pi-coding-agent':
         specifier: 0.84.3
-        version: 0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)
+        version: 0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.5.1))(ws@8.21.3)(zod@4.5.1)
       '@types/node':
         specifier: ^24.13.3
         version: 24.13.3
@@ -125,8 +125,8 @@ importers:
         specifier: ^4.20250712.0
         version: 4.20260702.1
       '@holocron.so/vite':
-        specifier: ^0.30.0
-        version: 0.30.0(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(hono@4.13.4)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(workerd@1.20260515.1)(wrangler@4.92.0(@cloudflare/workers-types@4.20260702.1))
+        specifier: ^0.33.1
+        version: 0.33.1(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(hono@4.13.5)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(workerd@1.20260515.1)(wrangler@4.92.0(@cloudflare/workers-types@4.20260702.1))
       '@tailwindcss/vite':
         specifier: ^4.3.0
         version: 4.3.3(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
@@ -138,7 +138,7 @@ importers:
         version: 19.2.8(react@19.2.8)
       spiceflow:
         specifier: 1.26.0-rsc.18
-        version: 1.26.0-rsc.18(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
+        version: 1.26.0-rsc.18(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
       zod:
         specifier: ^4.4.3
         version: 4.4.3
@@ -816,12 +816,12 @@ packages:
       '@modelcontextprotocol/sdk':
         optional: true
 
-  '@holocron.so/cli@0.21.1':
-    resolution: {integrity: sha512-VycIc442RDyWr3/0V03Rf4ojigPDnCdvzG0v3VEFHpuuadlAxJj8j39AvEdkwipuFuf+vPb7ooYprN/VQwN5Ig==}
+  '@holocron.so/cli@0.22.0':
+    resolution: {integrity: sha512-J5Nz2zWXk0jQi8+T6anrl+HVD29gnLXEmxc5Ew/ACniPvCFtFjdyVnrZRyAfn1JdffSv+rGRPDhI13lrfLiQMQ==}
     hasBin: true
 
-  '@holocron.so/vite@0.30.0':
-    resolution: {integrity: sha512-Q0KurJkkrhw8IOUijq1nlWS3Xy80undQr1BF9Lmz3p7cocLPpWgXlRf9grSLjqSCBQh46IdhntUdzBBGga0ahg==}
+  '@holocron.so/vite@0.33.1':
+    resolution: {integrity: sha512-7aLftuhQ2xW1BbP2f/EzbEYukkEvobNT3Mva1EQNHPzheufXuBviqi1zMH4EWjJ9meYTAQCT4CdCGRA4Xa+Vig==}
     hasBin: true
 
   '@hono/node-server@2.1.1':
@@ -1154,6 +1154,9 @@ packages:
 
   '@opencode-ai/sdk@1.18.23':
     resolution: {integrity: sha512-VouYbL8O2ynLq0atr5fjzCv8YLtFi/zKLQ/uYkCvTJ4CmUdA01XwPn8om+u3TvxnGEfQsBfmThGU141vt3sg5w==}
+
+  '@opencode-ai/sdk@1.18.5':
+    resolution: {integrity: sha512-7KgMvP5/1oxbhHj6kYBtPSTEdFKYpUeEYOzBTKdzSaRpapUpFFdn6Hkus3rr0rljO0kukWZIgRd3DrVBwTULGA==}
 
   '@orama/orama@3.1.18':
     resolution: {integrity: sha512-a61ljmRVVyG5MC/698C8/FfFDw5a8LOIvyOLW5fztgUXqUpc1jOfQzOitSCbge657OgXXThmY3Tk8fpiDb4UcA==}
@@ -2023,14 +2026,14 @@ packages:
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
 
-  '@ungap/structured-clone@1.3.3':
-    resolution: {integrity: sha512-60YRaenCQcVjYEKOcG824+DRGGIQ3VKErcBoAEDJZz5bKIs2ZG+X/H9Nk+Q6EVkwJk5QNApxbrc5QtBSwtrXAg==}
+  '@ungap/structured-clone@1.4.0':
+    resolution: {integrity: sha512-1mEZtMKPM09vDmQt5y7YvmN2+DFTP7Tg0EWXdic8/C6VRnpb33e4ghisCIE3WZjsE2N8mf+QV1Zqh7ZFYLWInQ==}
 
   '@upsetjs/venn.js@2.0.0':
     resolution: {integrity: sha512-WbBhLrooyePuQ1VZxrJjtLvTc4NVfpOyKx0sKqioq9bX1C1m7Jgykkn8gLrtwumBioXIqam8DLxp88Adbue6Hw==}
 
-  '@vitejs/plugin-react@6.1.0':
-    resolution: {integrity: sha512-qd2BzUBehkov86WFhg0JkEFEYyCLG9uPCe6qWTY/kRlss9OvJrOF2UbIWT7p+8IzZHkEu0DNGHc4HSv+JdDLsw==}
+  '@vitejs/plugin-react@6.1.1':
+    resolution: {integrity: sha512-yxLaQV9gkhS8ezJqCM6+ndU7mDY6gqAg75NQ+0IjwEI8IYOmQCgkRwHKVSfWXW076DsqMo0Dk+0FK1U+M5RgFw==}
     engines: {node: ^20.19.0 || >=22.12.0}
     peerDependencies:
       '@rolldown/plugin-babel': ^0.1.7 || ^0.2.0
@@ -2284,8 +2287,8 @@ packages:
     peerDependencies:
       cytoscape: ^3.2.0
 
-  cytoscape@3.34.1:
-    resolution: {integrity: sha512-Lr0RvH9H75y9ar8h9Toy6u4lxRSCcxUq+hHcQ26sVWo6BnaQp1gwEZOYqwuYTZhyW7npyKnNLP8oJ2p1/3OZ7g==}
+  cytoscape@3.34.2:
+    resolution: {integrity: sha512-Cm2jaj1X/PBNlzV9yH8zcfGOxO7U+CJ/+mxSBVPSchLaugdp4jtlGx5qaHtPRZ6tgiZ5P+o1XoRfJA+ba6KM3g==}
     engines: {node: '>=0.10'}
 
   d3-array@2.12.1:
@@ -2600,8 +2603,8 @@ packages:
     resolution: {integrity: sha512-HWcBoN6NileqtSydK2FqHbS/LoDd2pqrnQHLyJzBj4kOp/ky2MWMN694xOfkK8/SnUsW2DH7EfyVlydKCsm1Zw==}
     engines: {node: '>= 0.4'}
 
-  es-toolkit@1.51.0:
-    resolution: {integrity: sha512-zC2lQGkM7QX+Gm6iM3+WIdZJzthsEd14LvRNJneSO2hzyz/zNBENR8+YXWo1cKxgPBtV6ksPYHELbcwBRzmdCw==}
+  es-toolkit@1.52.0:
+    resolution: {integrity: sha512-XTNEJQh1tY1ZJVcf6ayP/2n4ZPyaHlW2FWs7xvw5ddPuhUVjLD3olQVQS7kf58JbAB48iL0uL/jerTrjtV3lDA==}
 
   esbuild@0.27.3:
     resolution: {integrity: sha512-8VwMnyGCONIs6cWue2IdpHxHnAjzxnw2Zr7MkVxB2vjmQ2ivqGFb4LEG3SMnv0Gb2F/G/2yA8zUaiL1gywDCCg==}
@@ -2827,8 +2830,8 @@ packages:
   highlight.js@10.7.3:
     resolution: {integrity: sha512-tzcUFauisWKNHaRkN4Wjl/ZA07gENAjFl3J/c480dprkGTg5EQstgaNFqBfUqCq54kZRIEcreTsAgF/m2quD7A==}
 
-  hono@4.13.4:
-    resolution: {integrity: sha512-AGEwKIyRMHRv1t8Wjwa3LHxQ61X5CqrdFT+4BRNTpqS5aJNnpl5WLjADb7vFlJzI/8uK7T5QLVApCMQKNa3LgQ==}
+  hono@4.13.5:
+    resolution: {integrity: sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw==}
     engines: {node: '>=16.9.0'}
 
   hosted-git-info@9.0.3:
@@ -3230,8 +3233,8 @@ packages:
     resolution: {integrity: sha512-Snk314V5ayFLhp3fkUREub6WtjBfPdCPY1Ln8/8munuLuiYhsABgBVWsozAG+MWMbVEvcdcpbi9R7ww22l9Q3g==}
     engines: {node: '>=18'}
 
-  mermaid@11.17.1:
-    resolution: {integrity: sha512-G1BP6qU4BRwEGk2SdsxgDk1cSuApimT32Nkb52YRSv+856FrmB8qo28BaNk9Ee8Fvuon3OxpXDJ4L6cD5AykXg==}
+  mermaid@11.17.2:
+    resolution: {integrity: sha512-V6K3C8EBdEsPFZXSKMJe6ppQOENxuHARr9GvHX4hh47lAbhMRD9qf4oEK7LoaRQxULMa80/qt5gHO73aCleBBg==}
 
   micromark-core-commonmark@2.0.3:
     resolution: {integrity: sha512-RDBrHEMSxVFLg6xvnXmb1Ayr2WzLAWjeSATAoxwKYJV94TeNavgoIdA0a9ytzDSVzBy2YKFK+emCPOEibLeCrg==}
@@ -3471,8 +3474,19 @@ packages:
     os: [darwin, linux, win32]
     hasBin: true
 
+  opencode-ai@1.18.5:
+    resolution: {integrity: sha512-Q0jlX4ihn7veMeYsLX3c4PYFAKIURU3GIpXt1FnhNxNn3v8+RpIZ8z9umG5D0r8g8Smp9fZLGjgLe/9mJ4NyYw==}
+    cpu: [arm64, x64]
+    os: [darwin, linux, win32]
+    hasBin: true
+
   opencode-darwin-arm64@1.18.23:
     resolution: {integrity: sha512-QP9PjwpHtZoLVXw2WvUmPZecz7mWbQkT4t3K36B//fCaDG+zWa+SsztIeaW5azujNwwtUemLA5icE/zINng48Q==}
+    cpu: [arm64]
+    os: [darwin]
+
+  opencode-darwin-arm64@1.18.5:
+    resolution: {integrity: sha512-an4t+aOHTREf1f1Z8mNIyEoy1iJL+434BuB+2UKFuAarMUaV37SWkPiS4oW8nvJjXyb8LC0AFSeVA8AeBy44cg==}
     cpu: [arm64]
     os: [darwin]
 
@@ -3481,8 +3495,18 @@ packages:
     cpu: [x64]
     os: [darwin]
 
+  opencode-darwin-x64-baseline@1.18.5:
+    resolution: {integrity: sha512-7coC1U01D3YoKiJFT/qop7zO6bGwJ+5NgkxV/SZvRbgfXFbaXpG4c38q/YOk6QcC3aJ11/3R7qgUFkfkyHFUPQ==}
+    cpu: [x64]
+    os: [darwin]
+
   opencode-darwin-x64@1.18.23:
     resolution: {integrity: sha512-R9nWP3edz/0FnEfwmuxtiWBB7bS4NtZCyCffJyiMlrbwdDC+bIXYrWxWXVrzaP1mJujs6g2MAwTCUSx/qpBhDw==}
+    cpu: [x64]
+    os: [darwin]
+
+  opencode-darwin-x64@1.18.5:
+    resolution: {integrity: sha512-mAXaO4qje89avIEclKeUHmuj0DJG4PBYljtGuMJaJtnQVNns/BzfZb4bR8IYfVXTv0QwYk2Sudju/mGN5vpNNA==}
     cpu: [x64]
     os: [darwin]
 
@@ -3492,8 +3516,19 @@ packages:
     os: [linux]
     libc: [musl]
 
+  opencode-linux-arm64-musl@1.18.5:
+    resolution: {integrity: sha512-GsX09fuzCUfRpDnZ/cS4Z0N4B6yk+Yckr1kXB2Z0sN2hajxqypOpwUkzaS/MkGgbRHP3vR2fFZQj0FSORHvy8w==}
+    cpu: [arm64]
+    os: [linux]
+    libc: [musl]
+
   opencode-linux-arm64@1.18.23:
     resolution: {integrity: sha512-g1zDFhuE9FOYwjSGderlu69wfd4GQzS0xsDiIY11QUciuBmM6DrHqLvmhlLFsUVHYVnCPY1YeN1pq5ewE3x72Q==}
+    cpu: [arm64]
+    os: [linux]
+
+  opencode-linux-arm64@1.18.5:
+    resolution: {integrity: sha512-cnv2IAi/TpitYJUq44TC0Ci5zVCi9Qspx/7P2pDNcp5IH9f6U58t9oi9WpHyVtkFthAQc2CdSIByb3HuduscAg==}
     cpu: [arm64]
     os: [linux]
 
@@ -3503,8 +3538,19 @@ packages:
     os: [linux]
     libc: [musl]
 
+  opencode-linux-x64-baseline-musl@1.18.5:
+    resolution: {integrity: sha512-2DdvOrg5kE2kaGdeFF/ifV9QfVFmzQM8eOthDTvDDdMm4fCWF1tmVpBdpcLO5tzZmVpO3M0aT6+TiF8/nKmq+A==}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
   opencode-linux-x64-baseline@1.18.23:
     resolution: {integrity: sha512-yUhBOXfTQour2JCdAkwD3DDqSnyxB0grefwdPqEhYmJHIkYxfJIIzyy6V//pyouvkE0XMouFtiuZXw8S6Wo0iQ==}
+    cpu: [x64]
+    os: [linux]
+
+  opencode-linux-x64-baseline@1.18.5:
+    resolution: {integrity: sha512-4eXOJCG/8KmPUlFe2vJTT7u24GOF8VMLPHlNjqrwu31CxlT+csEk287lI0ayPX3J0R1pbG71HLcJLqsokR+wvw==}
     cpu: [x64]
     os: [linux]
 
@@ -3514,8 +3560,19 @@ packages:
     os: [linux]
     libc: [musl]
 
+  opencode-linux-x64-musl@1.18.5:
+    resolution: {integrity: sha512-RrXkgR9SWRO9nP+kopCga/Cry2LrkPC+GaM0UIMUMaso/p3OJDSRinwFdSSNCf+J8JlI6vzjb1+eUyRApSWjtQ==}
+    cpu: [x64]
+    os: [linux]
+    libc: [musl]
+
   opencode-linux-x64@1.18.23:
     resolution: {integrity: sha512-5x9d1Cm/YtqzR6lAlNbgVprTQ3R3hx7qGTWCzm5l5u6lBNkhYTrhy2s8k25dxKKuxqZ9Kngqz9JYWvSVHy2Lmw==}
+    cpu: [x64]
+    os: [linux]
+
+  opencode-linux-x64@1.18.5:
+    resolution: {integrity: sha512-aa/Y6xznaGtE0kA2sZKdddY7iNBw/yrXWH0mA6fGs4GgrYc9jcXS+UXLwLZLWZwLLYBOFYoAoyeWiJoEZ0ba6w==}
     cpu: [x64]
     os: [linux]
 
@@ -3524,13 +3581,28 @@ packages:
     cpu: [arm64]
     os: [win32]
 
+  opencode-windows-arm64@1.18.5:
+    resolution: {integrity: sha512-9424cw1gPH+aLCN06NfRFk0j+KbYizguReEo8Ftsg4HHK09qAFtFwjc9rcakkWCSoF+an4U5fDOG1jfcf9jYcA==}
+    cpu: [arm64]
+    os: [win32]
+
   opencode-windows-x64-baseline@1.18.23:
     resolution: {integrity: sha512-AqXsTKaPcDx3rrid5bLUwJbQ/3vr9rJ6fvOStIznTzwrbOgP8wy5G4jCoIzu6KB/WxGx/d1MrV4cGaJ73qnjBA==}
     cpu: [x64]
     os: [win32]
 
+  opencode-windows-x64-baseline@1.18.5:
+    resolution: {integrity: sha512-KC9vzFEnwIXMaARLftiLqjtmVig6u7u+nzwya2UXr+b7DJj3LkSzSkv3jFD9AIGNox2saOr47Gt9VMeCtr6O6w==}
+    cpu: [x64]
+    os: [win32]
+
   opencode-windows-x64@1.18.23:
     resolution: {integrity: sha512-mMaIITuXzkNfjdcYL8uZaZuMDjulFyH/UCq9bxblam2mUZf9uWisoi5J6CXFsS/mkN7CZfTAt6PttSp4n3PH4g==}
+    cpu: [x64]
+    os: [win32]
+
+  opencode-windows-x64@1.18.5:
+    resolution: {integrity: sha512-b1cbKqn4RMWVH+I6utY0Qtgf/fXwu/asaa4sgrTOV//yrhxL42NKITD+nAzscgzHHzX1kzDkl8I2OBtW/KXWJg==}
     cpu: [x64]
     os: [win32]
 
@@ -4241,6 +4313,9 @@ packages:
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
+  zod@4.5.1:
+    resolution: {integrity: sha512-P3GqeAEOEDqKvafVGLezbg+39YW/ze4xrD4qdS0adOY8eoI3zfjv1PQM4UwQzgT8mZKXEbqtVt8K+ZKGqkMFKg==}
+
   zustand@5.0.15:
     resolution: {integrity: sha512-MpSEjRiBkA9crSYeOUH32rJC7SVqAbm0Fqcqge/bUi2PPoLcBWKOsG+C8mevmpr8TwXHBVkChbbJiyvkE+i/3A==}
     engines: {node: '>=12.20.0'}
@@ -4316,11 +4391,11 @@ snapshots:
       package-manager-detector: 1.8.0
       tinyexec: 1.3.0
 
-  '@anthropic-ai/sdk@0.91.1(zod@4.4.3)':
+  '@anthropic-ai/sdk@0.91.1(zod@4.5.1)':
     dependencies:
       json-schema-to-ts: 3.1.1
     optionalDependencies:
-      zod: 4.4.3
+      zod: 4.5.1
 
   '@aws-crypto/sha256-browser@5.2.0':
     dependencies:
@@ -4635,9 +4710,9 @@ snapshots:
     dependencies:
       '@jridgewell/trace-mapping': 0.3.9
 
-  '@earendil-works/pi-agent-core@0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)':
+  '@earendil-works/pi-agent-core@0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.5.1))(ws@8.21.3)(zod@4.5.1)':
     dependencies:
-      '@earendil-works/pi-ai': 0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)
+      '@earendil-works/pi-ai': 0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.5.1))(ws@8.21.3)(zod@4.5.1)
       '@earendil-works/pi-telemetry': 0.84.3
       diff: 8.0.4
       ignore: 7.0.5
@@ -4651,16 +4726,16 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)':
+  '@earendil-works/pi-ai@0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.5.1))(ws@8.21.3)(zod@4.5.1)':
     dependencies:
-      '@anthropic-ai/sdk': 0.91.1(zod@4.4.3)
+      '@anthropic-ai/sdk': 0.91.1(zod@4.5.1)
       '@aws-sdk/client-bedrock-runtime': 3.1048.0
       '@earendil-works/pi-telemetry': 0.84.3
-      '@google/genai': 1.52.0(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))
+      '@google/genai': 1.52.0(@modelcontextprotocol/sdk@1.30.0(zod@4.5.1))
       '@smithy/node-http-handler': 4.7.3
       http-proxy-agent: 7.0.2
       https-proxy-agent: 7.0.6
-      openai: 6.40.0(ws@8.21.3)(zod@4.4.3)
+      openai: 6.40.0(ws@8.21.3)(zod@4.5.1)
       partial-json: 0.1.7
       typebox: 1.3.7
     transitivePeerDependencies:
@@ -4675,10 +4750,10 @@ snapshots:
     dependencies:
       '@earendil-works/pi-protocol': 0.84.3
 
-  '@earendil-works/pi-coding-agent@0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)':
+  '@earendil-works/pi-coding-agent@0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.5.1))(ws@8.21.3)(zod@4.5.1)':
     dependencies:
-      '@earendil-works/pi-agent-core': 0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)
-      '@earendil-works/pi-ai': 0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(ws@8.21.3)(zod@4.4.3)
+      '@earendil-works/pi-agent-core': 0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.5.1))(ws@8.21.3)(zod@4.5.1)
+      '@earendil-works/pi-ai': 0.84.3(@modelcontextprotocol/sdk@1.30.0(zod@4.5.1))(ws@8.21.3)(zod@4.5.1)
       '@earendil-works/pi-client': 0.84.3
       '@earendil-works/pi-protocol': 0.84.3
       '@earendil-works/pi-tui': 0.84.3
@@ -4900,37 +4975,39 @@ snapshots:
 
   '@fontsource-variable/jetbrains-mono@5.3.0': {}
 
-  '@google/genai@1.52.0(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))':
+  '@google/genai@1.52.0(@modelcontextprotocol/sdk@1.30.0(zod@4.5.1))':
     dependencies:
       google-auth-library: 10.9.1
       p-retry: 4.6.2
       protobufjs: 7.6.5
       ws: 8.21.3
     optionalDependencies:
-      '@modelcontextprotocol/sdk': 1.30.0(zod@4.4.3)
+      '@modelcontextprotocol/sdk': 1.30.0(zod@4.5.1)
     transitivePeerDependencies:
       - bufferutil
       - supports-color
       - utf-8-validate
 
-  '@holocron.so/cli@0.21.1(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))':
+  '@holocron.so/cli@0.22.0(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))':
     dependencies:
       '@clack/prompts': 1.7.0
+      '@opencode-ai/sdk': 1.18.5
       fflate: 0.8.3
       goke: 6.14.1
       mdast-util-frontmatter: 2.0.1
       mdast-util-gfm: 3.1.0
       mdast-util-mdx: 3.0.0
       mdast-util-to-markdown: 2.1.2
+      opencode-ai: 1.18.5
       remark: 15.0.1
       remark-frontmatter: 5.0.0
       remark-gfm: 4.0.1
       remark-mdx: 3.1.1
-      spiceflow: 1.26.0-rsc.18(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
+      spiceflow: 1.26.0-rsc.18(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.5.1)
       string-dedent: 3.0.2
       unist-util-visit: 5.1.0
       yaml: 2.9.0
-      zod: 4.4.3
+      zod: 4.5.1
     transitivePeerDependencies:
       - '@modelcontextprotocol/sdk'
       - '@types/react'
@@ -4941,12 +5018,12 @@ snapshots:
       - supports-color
       - vite
 
-  '@holocron.so/vite@0.30.0(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(hono@4.13.4)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(workerd@1.20260515.1)(wrangler@4.92.0(@cloudflare/workers-types@4.20260702.1))':
+  '@holocron.so/vite@0.33.1(@types/react-dom@19.2.5(@types/react@19.2.18))(@types/react@19.2.18)(hono@4.13.5)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(workerd@1.20260515.1)(wrangler@4.92.0(@cloudflare/workers-types@4.20260702.1))':
     dependencies:
       '@cloudflare/vite-plugin': 1.35.0(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(workerd@1.20260515.1)(wrangler@4.92.0(@cloudflare/workers-types@4.20260702.1))
       '@fontsource-variable/inter': 5.3.0
       '@fontsource-variable/jetbrains-mono': 5.3.0
-      '@holocron.so/cli': 0.21.1(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+      '@holocron.so/cli': 0.22.0(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
       '@iconify-json/fa6-brands': 1.2.6
       '@iconify-json/fa6-regular': 1.2.4
       '@iconify-json/fa6-solid': 1.2.4
@@ -4958,7 +5035,7 @@ snapshots:
       '@scalar/openapi-upgrader': 0.2.15
       '@tailwindcss/typography': 0.5.20(tailwindcss@4.3.3)
       '@tailwindcss/vite': 4.3.3(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
-      '@vitejs/plugin-react': 6.1.0(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+      '@vitejs/plugin-react': 6.1.1(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
       clsx: 2.1.1
       cookie: 1.1.1
       dedent: 1.7.2
@@ -4970,7 +5047,7 @@ snapshots:
       mdast-util-gfm: 3.1.0
       mdast-util-mdx: 3.0.0
       mdast-util-to-markdown: 2.1.2
-      mermaid: 11.17.1
+      mermaid: 11.17.2
       micromark-heading-id: 2.0.0
       motion: 12.43.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
       openapi-types: 12.1.3
@@ -4983,7 +5060,7 @@ snapshots:
       remark-gfm: 4.0.1
       remark-mdx: 3.1.1
       safe-mdx: 1.14.0(react-dom@19.2.8(react@19.2.8))(react@19.2.8)
-      spiceflow: 1.26.0-rsc.18(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
+      spiceflow: 1.26.0-rsc.18(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3)
       string-dedent: 3.0.2
       tailwind-merge: 3.6.0
       tailwindcss: 4.3.3
@@ -5018,9 +5095,9 @@ snapshots:
       - workerd
       - wrangler
 
-  '@hono/node-server@2.1.1(hono@4.13.4)':
+  '@hono/node-server@2.1.1(hono@4.13.5)':
     dependencies:
-      hono: 4.13.4
+      hono: 4.13.5
 
   '@iconify-json/fa6-brands@1.2.6':
     dependencies:
@@ -5216,7 +5293,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.30.0(zod@4.4.3)':
     dependencies:
-      '@hono/node-server': 2.1.1(hono@4.13.4)
+      '@hono/node-server': 2.1.1(hono@4.13.5)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -5226,7 +5303,7 @@ snapshots:
       eventsource-parser: 3.1.1
       express: 5.2.1
       express-rate-limit: 8.6.2(express@5.2.1)
-      hono: 4.13.4
+      hono: 4.13.5
       jose: 6.2.10
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
@@ -5235,6 +5312,29 @@ snapshots:
       zod-to-json-schema: 3.25.2(zod@4.4.3)
     transitivePeerDependencies:
       - supports-color
+
+  '@modelcontextprotocol/sdk@1.30.0(zod@4.5.1)':
+    dependencies:
+      '@hono/node-server': 2.1.1(hono@4.13.5)
+      ajv: 8.20.0
+      ajv-formats: 3.0.1(ajv@8.20.0)
+      content-type: 1.0.5
+      cors: 2.8.6
+      cross-spawn: 7.0.6
+      eventsource: 3.0.7
+      eventsource-parser: 3.1.1
+      express: 5.2.1
+      express-rate-limit: 8.6.2(express@5.2.1)
+      hono: 4.13.5
+      jose: 6.2.10
+      json-schema-typed: 8.0.2
+      pkce-challenge: 5.0.1
+      raw-body: 3.0.2
+      zod: 4.5.1
+      zod-to-json-schema: 3.25.2(zod@4.5.1)
+    transitivePeerDependencies:
+      - supports-color
+    optional: true
 
   '@msgpackr-extract/msgpackr-extract-darwin-arm64@3.0.4':
     optional: true
@@ -5265,6 +5365,10 @@ snapshots:
       zod: 4.1.8
 
   '@opencode-ai/sdk@1.18.23':
+    dependencies:
+      cross-spawn: 7.0.6
+
+  '@opencode-ai/sdk@1.18.5':
     dependencies:
       cross-spawn: 7.0.6
 
@@ -5992,14 +6096,14 @@ snapshots:
     dependencies:
       '@types/node': 24.13.3
 
-  '@ungap/structured-clone@1.3.3': {}
+  '@ungap/structured-clone@1.4.0': {}
 
   '@upsetjs/venn.js@2.0.0':
     optionalDependencies:
       d3-selection: 3.0.0
       d3-transition: 3.0.1(d3-selection@3.0.0)
 
-  '@vitejs/plugin-react@6.1.0(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))':
+  '@vitejs/plugin-react@6.1.1(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
       vite: 8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
@@ -6217,17 +6321,17 @@ snapshots:
 
   csstype@3.2.3: {}
 
-  cytoscape-cose-bilkent@4.1.0(cytoscape@3.34.1):
+  cytoscape-cose-bilkent@4.1.0(cytoscape@3.34.2):
     dependencies:
       cose-base: 1.0.3
-      cytoscape: 3.34.1
+      cytoscape: 3.34.2
 
-  cytoscape-fcose@2.2.0(cytoscape@3.34.1):
+  cytoscape-fcose@2.2.0(cytoscape@3.34.2):
     dependencies:
       cose-base: 2.2.0
-      cytoscape: 3.34.1
+      cytoscape: 3.34.2
 
-  cytoscape@3.34.1: {}
+  cytoscape@3.34.2: {}
 
   d3-array@2.12.1:
     dependencies:
@@ -6537,7 +6641,7 @@ snapshots:
     dependencies:
       es-errors: 1.3.0
 
-  es-toolkit@1.51.0: {}
+  es-toolkit@1.52.0: {}
 
   esbuild@0.27.3:
     optionalDependencies:
@@ -6848,7 +6952,7 @@ snapshots:
 
   highlight.js@10.7.3: {}
 
-  hono@4.13.4: {}
+  hono@4.13.5: {}
 
   hosted-git-info@9.0.3:
     dependencies:
@@ -7263,7 +7367,7 @@ snapshots:
     dependencies:
       '@types/hast': 3.0.5
       '@types/mdast': 4.0.4
-      '@ungap/structured-clone': 1.3.3
+      '@ungap/structured-clone': 1.4.0
       devlop: 1.1.0
       micromark-util-sanitize-uri: 2.0.1
       trim-lines: 3.0.1
@@ -7291,22 +7395,22 @@ snapshots:
 
   merge-descriptors@2.0.0: {}
 
-  mermaid@11.17.1:
+  mermaid@11.17.2:
     dependencies:
       '@braintree/sanitize-url': 7.1.2
       '@iconify/utils': 3.1.4
       '@mermaid-js/parser': 1.2.1
       '@types/d3': 7.4.3
       '@upsetjs/venn.js': 2.0.0
-      cytoscape: 3.34.1
-      cytoscape-cose-bilkent: 4.1.0(cytoscape@3.34.1)
-      cytoscape-fcose: 2.2.0(cytoscape@3.34.1)
+      cytoscape: 3.34.2
+      cytoscape-cose-bilkent: 4.1.0(cytoscape@3.34.2)
+      cytoscape-fcose: 2.2.0(cytoscape@3.34.2)
       d3: 7.9.0
       d3-sankey: 0.12.3
       dagre-d3-es: 7.0.14
       dayjs: 1.11.23
       dompurify: 3.4.14
-      es-toolkit: 1.51.0
+      es-toolkit: 1.52.0
       fastdom: 1.0.12
       katex: 0.16.47
       khroma: 2.1.0
@@ -7702,10 +7806,10 @@ snapshots:
     dependencies:
       wrappy: 1.0.2
 
-  openai@6.40.0(ws@8.21.3)(zod@4.4.3):
+  openai@6.40.0(ws@8.21.3)(zod@4.5.1):
     optionalDependencies:
       ws: 8.21.3
-      zod: 4.4.3
+      zod: 4.5.1
 
   openapi-types@12.1.3: {}
 
@@ -7724,40 +7828,91 @@ snapshots:
       opencode-windows-x64: 1.18.23
       opencode-windows-x64-baseline: 1.18.23
 
+  opencode-ai@1.18.5:
+    optionalDependencies:
+      opencode-darwin-arm64: 1.18.5
+      opencode-darwin-x64: 1.18.5
+      opencode-darwin-x64-baseline: 1.18.5
+      opencode-linux-arm64: 1.18.5
+      opencode-linux-arm64-musl: 1.18.5
+      opencode-linux-x64: 1.18.5
+      opencode-linux-x64-baseline: 1.18.5
+      opencode-linux-x64-baseline-musl: 1.18.5
+      opencode-linux-x64-musl: 1.18.5
+      opencode-windows-arm64: 1.18.5
+      opencode-windows-x64: 1.18.5
+      opencode-windows-x64-baseline: 1.18.5
+
   opencode-darwin-arm64@1.18.23:
+    optional: true
+
+  opencode-darwin-arm64@1.18.5:
     optional: true
 
   opencode-darwin-x64-baseline@1.18.23:
     optional: true
 
+  opencode-darwin-x64-baseline@1.18.5:
+    optional: true
+
   opencode-darwin-x64@1.18.23:
+    optional: true
+
+  opencode-darwin-x64@1.18.5:
     optional: true
 
   opencode-linux-arm64-musl@1.18.23:
     optional: true
 
+  opencode-linux-arm64-musl@1.18.5:
+    optional: true
+
   opencode-linux-arm64@1.18.23:
+    optional: true
+
+  opencode-linux-arm64@1.18.5:
     optional: true
 
   opencode-linux-x64-baseline-musl@1.18.23:
     optional: true
 
+  opencode-linux-x64-baseline-musl@1.18.5:
+    optional: true
+
   opencode-linux-x64-baseline@1.18.23:
+    optional: true
+
+  opencode-linux-x64-baseline@1.18.5:
     optional: true
 
   opencode-linux-x64-musl@1.18.23:
     optional: true
 
+  opencode-linux-x64-musl@1.18.5:
+    optional: true
+
   opencode-linux-x64@1.18.23:
+    optional: true
+
+  opencode-linux-x64@1.18.5:
     optional: true
 
   opencode-windows-arm64@1.18.23:
     optional: true
 
+  opencode-windows-arm64@1.18.5:
+    optional: true
+
   opencode-windows-x64-baseline@1.18.23:
     optional: true
 
+  opencode-windows-x64-baseline@1.18.5:
+    optional: true
+
   opencode-windows-x64@1.18.23:
+    optional: true
+
+  opencode-windows-x64@1.18.5:
     optional: true
 
   p-retry@4.6.2:
@@ -8183,7 +8338,7 @@ snapshots:
 
   space-separated-tokens@2.0.2: {}
 
-  spiceflow@1.26.0-rsc.18(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.4)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3):
+  spiceflow@1.26.0-rsc.18(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.4.3):
     dependencies:
       '@vitejs/plugin-rsc': 0.5.34(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
       eventsource-parser: 3.1.1
@@ -8193,7 +8348,24 @@ snapshots:
       zod: 4.4.3
     optionalDependencies:
       '@modelcontextprotocol/sdk': 1.30.0(zod@4.4.3)
-      hono: 4.13.4
+      hono: 4.13.5
+      react: 19.2.8
+      react-dom: 19.2.8(react@19.2.8)
+    transitivePeerDependencies:
+      - '@types/react'
+      - react-server-dom-webpack
+
+  spiceflow@1.26.0-rsc.18(@modelcontextprotocol/sdk@1.30.0(zod@4.4.3))(@types/react@19.2.18)(hono@4.13.5)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))(zod@4.5.1):
+    dependencies:
+      '@vitejs/plugin-rsc': 0.5.34(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(vite@8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
+      eventsource-parser: 3.1.1
+      its-fine: 2.0.0(@types/react@19.2.18)(react@19.2.8)
+      nf3: 0.3.16
+      vite: 8.2.2(@types/node@24.13.3)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0)
+      zod: 4.5.1
+    optionalDependencies:
+      '@modelcontextprotocol/sdk': 1.30.0(zod@4.4.3)
+      hono: 4.13.5
       react: 19.2.8
       react-dom: 19.2.8(react@19.2.8)
     transitivePeerDependencies:
@@ -8533,9 +8705,16 @@ snapshots:
     dependencies:
       zod: 4.4.3
 
+  zod-to-json-schema@3.25.2(zod@4.5.1):
+    dependencies:
+      zod: 4.5.1
+    optional: true
+
   zod@4.1.8: {}
 
   zod@4.4.3: {}
+
+  zod@4.5.1: {}
 
   zustand@5.0.15(@types/react@19.2.18)(react@19.2.8):
     optionalDependencies:
