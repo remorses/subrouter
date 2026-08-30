@@ -7,6 +7,8 @@ export {
   failureDetailsFromError,
   isPermanentRefreshFailure,
   closeOpenAIWebSockets,
+  loadModelsDevCatalog,
+  modelsDevLimit,
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
   type FailureDetails,

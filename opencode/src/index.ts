@@ -6,8 +6,8 @@
  * URL, so opencode never installs anything). Each subrouter preset becomes a
  * model: pick `subrouter/default` (or any preset created with
  * `subrouter preset create`) in opencode. Provider id stays `subrouter`; the
- * visible name is `subrouter.org`. Model names are `preset (model)`. The system
- * identity uses the live routed candidate, not the preset id.
+ * visible name is `subrouter.org`. Model names, context limits, and
+ * `experimental.chat.system.transform` follow the first live routed candidate.
  *
  * `subrouterAuthPlugin` registers the login flow, so `opencode auth login`
  * (and any harness driving opencode's auth hook, like kimaki's Discord
@@ -24,7 +24,9 @@ import {
   addAccount,
   DEFAULT_PRESET_NAME,
   isProviderId,
+  loadModelsDevCatalog,
   loadPresets,
+  modelsDevLimit,
   PROVIDER_DISPLAY_NAME,
   PROVIDER_ID,
   PROVIDER_IDS,
@@ -45,10 +47,18 @@ export const subrouterPlugin: Plugin = async () => {
         return { version: 1 as const, presets: {} }
       })
       const names = new Set([DEFAULT_PRESET_NAME, ...Object.keys(presets.presets)])
+      const catalog = await loadModelsDevCatalog()
       const models = Object.fromEntries(
         await Promise.all(
           [...names].map(async (name) => {
             const candidate = await resolveActiveCandidate(name)
+            const limit = candidate
+              ? modelsDevLimit({
+                  provider: candidate.provider,
+                  modelId: candidate.modelId,
+                  catalog,
+                })
+              : null
             return [
               name,
               {
@@ -63,7 +73,7 @@ export const subrouterPlugin: Plugin = async () => {
                   output: ['text'] satisfies Array<'text'>,
                 },
                 cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-                limit: { context: 200_000, output: 64_000 },
+                limit: limit ?? { context: 200_000, output: 64_000 },
               },
             ]
           }),

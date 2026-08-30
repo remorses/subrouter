@@ -15,11 +15,13 @@ const pluginInput = {} as PluginInput
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'subrouter-plugin-'))
   process.env.SUBROUTER_HOME = home
+  process.env.SUBROUTER_MODELS_DEV_URL = await startFakeModelsDev()
 })
 
 afterEach(async () => {
   delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_OPENAI_ISSUER_URL
+  delete process.env.SUBROUTER_MODELS_DEV_URL
   for (const server of openServers.splice(0)) {
     await new Promise<void>((resolve) => {
       server.close(() => {
@@ -29,6 +31,47 @@ afterEach(async () => {
   }
   await rm(home, { recursive: true, force: true })
 })
+
+async function startFakeModelsDev(
+  providers: Record<
+    string,
+    {
+      models: Record<
+        string,
+        {
+          id: string
+          modalities?: { output?: string[] }
+          limit?: { context?: number; output?: number; input?: number }
+        }
+      >
+    }
+  > = {},
+) {
+  const payload = {
+    anthropic: { models: {} },
+    openai: { models: {} },
+    xai: { models: {} },
+    'opencode-go': { models: {} },
+    'github-copilot': { models: {} },
+    poe: { models: {} },
+    'minimax-coding-plan': { models: {} },
+    'kimi-for-coding': { models: {} },
+    'zai-coding-plan': { models: {} },
+    'alibaba-coding-plan': { models: {} },
+    ...providers,
+  }
+  const server = createServer((_req, res) => {
+    res.writeHead(200, { 'Content-Type': 'application/json' })
+    res.end(JSON.stringify(payload))
+  })
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  const address = server.address()
+  if (typeof address === 'string' || !address) throw new Error('failed to bind fake models.dev')
+  openServers.push(server)
+  return `http://127.0.0.1:${address.port}`
+}
 
 /** Minimal stand-in for the OpenAI Codex device endpoints. */
 async function startFakeOpenAIIssuer() {
@@ -93,6 +136,8 @@ test('config hook registers the subrouter provider with preset models', async ()
   expect(provider.models.default.name).toBe('default')
   expect(provider.models.work.name).toBe('work')
   expect(provider.models.default.cost).toEqual({ input: 0, output: 0, cache_read: 0, cache_write: 0 })
+  expect(provider.models.default.limit).toEqual({ context: 200_000, output: 64_000 })
+  expect(provider.models.work.limit).toEqual({ context: 200_000, output: 64_000 })
 })
 
 test('preset model names show the first live candidate', async () => {
@@ -119,6 +164,51 @@ test('preset model names show the first live candidate', async () => {
 
   expect(config.provider?.subrouter?.name).toBe(PROVIDER_DISPLAY_NAME)
   expect(config.provider?.subrouter?.models?.work?.name).toBe('work (claude-opus-4-6)')
+})
+
+test('preset model limits follow the first live candidate', async () => {
+  const modelId = adapters.anthropic.defaultModels[0]
+  if (!modelId) throw new Error('anthropic adapter has no default model')
+  process.env.SUBROUTER_MODELS_DEV_URL = await startFakeModelsDev({
+    anthropic: {
+      models: {
+        [modelId]: {
+          id: modelId,
+          modalities: { output: ['text'] },
+          limit: { context: 1_000_000, output: 128_000 },
+        },
+      },
+    },
+  })
+  await addAccount({
+    provider: 'anthropic',
+    account: {
+      type: 'oauth',
+      refresh: 'refresh-1',
+      access: 'access-1',
+      expires: Date.now() + 60_000,
+      email: 'a@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await writeFile(
+    path.join(home, 'presets.json'),
+    JSON.stringify({ version: 1, presets: { work: [`anthropic/${modelId}`] } }),
+  )
+
+  const hooks = await subrouterPlugin(pluginInput)
+  const config: Config = {}
+  await hooks.config?.(config)
+
+  expect(config.provider?.subrouter?.models?.work?.limit).toEqual({
+    context: 1_000_000,
+    output: 128_000,
+  })
+  expect(config.provider?.subrouter?.models?.default?.limit).toEqual({
+    context: 1_000_000,
+    output: 128_000,
+  })
 })
 
 test('preset models permit image and PDF attachments', async () => {

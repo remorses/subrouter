@@ -10,7 +10,15 @@ import type { LanguageModelV3 } from '@ai-sdk/provider'
 import { APICallError } from '@ai-sdk/provider'
 import * as errore from 'errore'
 import { z } from 'zod'
-import { isProviderId, type ProviderId, type StoredAccount } from '../store.ts'
+import path from 'node:path'
+import {
+  isProviderId,
+  readJson,
+  subrouterHome,
+  writeJson,
+  type ProviderId,
+  type StoredAccount,
+} from '../store.ts'
 import { anthropicAdapter } from './anthropic.ts'
 import { alibabaAdapter, kimiAdapter, minimaxAdapter, zaiAdapter } from './coding-plans.ts'
 import { githubCopilotAdapter } from './github-copilot.ts'
@@ -142,6 +150,11 @@ export class InvalidModelError extends errore.createTaggedError({
   message: 'Model $entry is not available as a text-output language model in models.dev',
 }) {}
 
+const modelsDevLimitSchema = z.object({
+  context: z.number().optional(),
+  output: z.number().optional(),
+})
+
 const modelsDevModelSchema = z.object({
   id: z.string(),
   modalities: z
@@ -149,18 +162,61 @@ const modelsDevModelSchema = z.object({
       output: z.array(z.string()).optional(),
     })
     .optional(),
+  limit: modelsDevLimitSchema.optional(),
 })
+
+export type ModelsDevLimit = {
+  context: number
+  output: number
+}
+
+function catalogLimit(model: z.infer<typeof modelsDevModelSchema>): ModelsDevLimit | null {
+  const context = model.limit?.context
+  const output = model.limit?.output
+  if (typeof context !== 'number' || typeof output !== 'number') return null
+  return { context, output }
+}
+
+const MODELS_DEV_PROVIDER_KEYS = [
+  'anthropic',
+  'openai',
+  'xai',
+  'opencode-go',
+  'github-copilot',
+  'poe',
+  'minimax-coding-plan',
+  'kimi-for-coding',
+  'zai-coding-plan',
+  'alibaba-coding-plan',
+] as const
+
+const CATALOG_TTL_MS = 24 * 60 * 60 * 1000
+
+function catalogCachePath() {
+  return path.join(subrouterHome(), 'models-dev.json')
+}
+
+function trimModelsDevPayload(payload: object) {
+  const source = Object.fromEntries(Object.entries(payload))
+  return Object.fromEntries(
+    MODELS_DEV_PROVIDER_KEYS.map((key) => {
+      const provider = source[key]
+      if (provider && typeof provider === 'object') return [key, provider]
+      return [key, { models: {} }]
+    }),
+  )
+}
 
 const modelsDevProviderSchema = z
   .object({ models: z.record(z.string(), modelsDevModelSchema) })
-  .transform(
-    ({ models }) =>
-      new Set(
-        Object.entries(models)
-          .filter(([, model]) => model.modalities?.output?.includes('text'))
-          .map(([modelId]) => modelId),
-      ),
-  )
+  .transform(({ models }) => {
+    const catalog = new Map<string, ModelsDevLimit | null>()
+    for (const [modelId, model] of Object.entries(models)) {
+      if (!model.modalities?.output?.includes('text')) continue
+      catalog.set(modelId, catalogLimit(model))
+    }
+    return catalog
+  })
 
 const modelsDevCatalogSchema = z
   .object({
@@ -198,8 +254,23 @@ export function parseModelsDevCatalog(payload: object): ModelsDevError | ModelsD
   return catalog.data
 }
 
-export async function loadModelsDevCatalog() {
-  const response = await fetch('https://models.dev/api.json', {
+export function modelsDevLimit({
+  provider,
+  modelId,
+  catalog,
+}: {
+  provider: ProviderId
+  modelId: string
+  catalog: ModelsDevCatalog | Error
+}) {
+  if (catalog instanceof Error) return null
+  return catalog[provider].get(modelId) ?? null
+}
+
+async function fetchModelsDevPayload() {
+  // Tests point this at a local server. Never hit models.dev from a unit test.
+  const url = modelsDevUrl()
+  const response = await fetch(url, {
     signal: AbortSignal.timeout(10_000),
   }).catch((cause) => new ModelsDevError({ reason: 'request failed', cause }))
   if (response instanceof Error) return response
@@ -212,8 +283,40 @@ export async function loadModelsDevCatalog() {
   if (!payload || typeof payload !== 'object') {
     return new ModelsDevError({ reason: 'invalid response shape' })
   }
+  return payload
+}
 
-  return parseModelsDevCatalog(payload)
+function modelsDevUrl() {
+  return process.env.SUBROUTER_MODELS_DEV_URL ?? 'https://models.dev/api.json'
+}
+
+export async function loadModelsDevCatalog() {
+  const url = modelsDevUrl()
+  const cached = await readJson<{ fetchedAt: number; url: string; payload: object } | null>(
+    catalogCachePath(),
+    null,
+  )
+  if (cached && cached.url === url && Date.now() - cached.fetchedAt < CATALOG_TTL_MS) {
+    const parsed = parseModelsDevCatalog(cached.payload)
+    if (!(parsed instanceof Error)) return parsed
+  }
+
+  const payload = await fetchModelsDevPayload()
+  if (payload instanceof Error) {
+    if (!cached || cached.url !== url) return payload
+    return parseModelsDevCatalog(cached.payload)
+  }
+
+  const trimmed = trimModelsDevPayload(payload)
+  const cachedWrite = await writeJson(catalogCachePath(), {
+    fetchedAt: Date.now(),
+    url,
+    payload: trimmed,
+  }).catch((cause) => new ModelsDevError({ reason: 'cache write failed', cause }))
+  if (cachedWrite instanceof Error) {
+    console.warn(cachedWrite.message)
+  }
+  return parseModelsDevCatalog(trimmed)
 }
 
 export function validateModelsDevModelIds({

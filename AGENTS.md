@@ -41,7 +41,7 @@ pnpm workspace, flat `./*` packages. **One root README only, no per-package READ
   - `src/adapters/` — one adapter per provider (login flow, token refresh, fetch wrapper, `createModel`). Shared failure classification in `adapters/index.ts`.
   - `src/router.ts` — `RouterModel` (AI SDK `LanguageModelV3`) + `createSubrouter` provider factory. Resolves a preset to ranked candidates, skips cooldowns, fails over on rotate-worthy errors.
   - `src/cli.ts` — goke CLI (`login`, `logout`, `account`, `preset`, `status`, `cooldown clear`).
-- `opencode/` — npm package `@subrouter/opencode`. Plugin `config` hook injects a `subrouter` provider whose `npm` field is a `file://` URL to the bundled `provider.js`; every preset becomes a model (`subrouter/<preset>`). Visible provider name is `subrouter.org`. Model names and `experimental.chat.system.transform` show the first live routed candidate. Only plugin initializers may be exported from `src/index.ts` (opencode calls every export as a plugin).
+- `opencode/` — npm package `@subrouter/opencode`. Plugin `config` hook injects a `subrouter` provider whose `npm` field is a `file://` URL to the bundled `provider.js`; every preset becomes a model (`subrouter/<preset>`). Visible provider name is `subrouter.org`. Model names, context limits, and `experimental.chat.system.transform` follow the first live routed candidate. Only plugin initializers may be exported from `src/index.ts` (opencode calls every export as a plugin).
 - `pi/` — npm package `@subrouter/pi`. Registers one native Pi provider and one logical model per preset. It selects accounts, then delegates to Pi's built-in provider streams without translating events.
 - `website/` — Holocron docs site deployed to subrouter.org.
 

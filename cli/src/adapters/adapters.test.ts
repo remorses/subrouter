@@ -1,8 +1,13 @@
+import { createServer } from 'node:http'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { describe, expect, test } from 'vitest'
 import {
   classifyFailure,
   isPermanentRefreshFailure,
   loadModelsDevCatalog,
+  modelsDevLimit,
   parseModelsDevCatalog,
   validateModelsDevModelIds,
 } from './index.ts'
@@ -86,7 +91,7 @@ describe('models.dev validation', () => {
     expect(catalog).not.toBeInstanceOf(Error)
     if (catalog instanceof Error) return
 
-    expect([...catalog.openai]).toEqual(['text-only', 'multimodal'])
+    expect([...catalog.openai.keys()]).toEqual(['text-only', 'multimodal'])
     expect(
       validateModelsDevModelIds({
         entries: ['openai/text-only', 'openai/multimodal'],
@@ -128,6 +133,95 @@ describe('models.dev validation', () => {
     expect(
       validateModelsDevModelIds({ entries: ['opencode-go/glm-5.3-flash'], catalog }),
     ).toBeNull()
+  })
+
+  test('looks up context and output limits for a text model', () => {
+    const catalog = parseModelsDevCatalog({
+      ...payload,
+      openai: {
+        models: {
+          'text-only': {
+            id: 'text-only',
+            modalities: { output: ['text'] },
+            limit: { context: 400_000, output: 32_000 },
+          },
+        },
+      },
+    })
+    expect(catalog).not.toBeInstanceOf(Error)
+    if (catalog instanceof Error) return
+
+    expect(
+      modelsDevLimit({ provider: 'openai', modelId: 'text-only', catalog }),
+    ).toEqual({ context: 400_000, output: 32_000 })
+    expect(modelsDevLimit({ provider: 'openai', modelId: 'missing', catalog })).toBeNull()
+    expect(
+      modelsDevLimit({ provider: 'openai', modelId: 'text-only', catalog: new Error('offline') }),
+    ).toBeNull()
+  })
+
+  test('caches the catalog and reuses it when models.dev is unreachable', async () => {
+    const home = await mkdtemp(path.join(tmpdir(), 'subrouter-catalog-'))
+    const previousHome = process.env.SUBROUTER_HOME
+    const previousUrl = process.env.SUBROUTER_MODELS_DEV_URL
+    process.env.SUBROUTER_HOME = home
+    let hits = 0
+    const server = createServer((_req, res) => {
+      hits += 1
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end(
+        JSON.stringify({
+          ...payload,
+          openai: {
+            models: {
+              'text-only': {
+                id: 'text-only',
+                modalities: { output: ['text'] },
+                limit: { context: 400_000, output: 32_000 },
+              },
+            },
+          },
+        }),
+      )
+    })
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address()
+    if (typeof address === 'string' || !address) throw new Error('failed to bind fake models.dev')
+    process.env.SUBROUTER_MODELS_DEV_URL = `http://127.0.0.1:${address.port}`
+
+    try {
+      const first = await loadModelsDevCatalog()
+      const second = await loadModelsDevCatalog()
+      expect(first).not.toBeInstanceOf(Error)
+      expect(second).not.toBeInstanceOf(Error)
+      expect(hits).toBe(1)
+
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve()
+        })
+      })
+      const third = await loadModelsDevCatalog()
+      expect(third).not.toBeInstanceOf(Error)
+      if (third instanceof Error) return
+      expect(modelsDevLimit({ provider: 'openai', modelId: 'text-only', catalog: third })).toEqual({
+        context: 400_000,
+        output: 32_000,
+      })
+    } finally {
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve()
+        })
+      })
+      if (previousHome === undefined) delete process.env.SUBROUTER_HOME
+      else process.env.SUBROUTER_HOME = previousHome
+      if (previousUrl === undefined) delete process.env.SUBROUTER_MODELS_DEV_URL
+      else process.env.SUBROUTER_MODELS_DEV_URL = previousUrl
+      await rm(home, { recursive: true, force: true })
+    }
   })
 
   test('rejects malformed model records clearly', () => {
