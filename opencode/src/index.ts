@@ -6,8 +6,8 @@
  * URL, so opencode never installs anything). Each subrouter preset becomes a
  * model: pick `subrouter/default` (or any preset created with
  * `subrouter preset create`) in opencode. Provider id stays `subrouter`; the
- * visible name is `subrouter.org`. Model names and the system identity use the
- * live routed candidate, not the preset id.
+ * visible name is `subrouter.org`. Model names are `preset (model)`. The system
+ * identity uses the live routed candidate, not the preset id.
  *
  * `subrouterAuthPlugin` registers the login flow, so `opencode auth login`
  * (and any harness driving opencode's auth hook, like kimaki's Discord
@@ -23,7 +23,6 @@ import {
   adapters,
   addAccount,
   DEFAULT_PRESET_NAME,
-  formatCandidateRef,
   isProviderId,
   loadPresets,
   PROVIDER_DISPLAY_NAME,
@@ -53,7 +52,7 @@ export const subrouterPlugin: Plugin = async () => {
             return [
               name,
               {
-                name: candidate ? formatCandidateRef(candidate) : name,
+                name: candidate ? `${name} (${candidate.modelId})` : name,
                 tool_call: true,
                 attachment: true,
                 reasoning: false,

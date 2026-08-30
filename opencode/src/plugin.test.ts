@@ -118,7 +118,7 @@ test('preset model names show the first live candidate', async () => {
   await hooks.config?.(config)
 
   expect(config.provider?.subrouter?.name).toBe(PROVIDER_DISPLAY_NAME)
-  expect(config.provider?.subrouter?.models?.work?.name).toBe('anthropic/claude-opus-4-6')
+  expect(config.provider?.subrouter?.models?.work?.name).toBe('work (claude-opus-4-6)')
 })
 
 test('preset models permit image and PDF attachments', async () => {
