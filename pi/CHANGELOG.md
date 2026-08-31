@@ -2,6 +2,12 @@
 
 # Changelog
 
+## 0.2.0
+
+1. **Show the provider as `subrouter.org`** in Pi, matching OpenCode. Preset model ids stay `subrouter/<preset>`.
+
+2. **Use `opencode-go` for the OpenCode Go plan.** Pi now has a native OpenAI-compatible provider for that id. Existing `opencode` accounts are copied to `opencode-go` on first load.
+
 ## 0.1.0
 
 1. **Use Subrouter presets as native Pi models:** install the extension once, then select the same `subrouter/<preset>` model names used by OpenCode:

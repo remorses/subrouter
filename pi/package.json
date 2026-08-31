@@ -1,6 +1,6 @@
 {
   "name": "@subrouter/pi",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "Pi extension that cycles through personal AI subscriptions with native provider streams.",
   "main": "./dist/index.js",

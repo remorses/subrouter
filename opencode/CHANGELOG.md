@@ -2,6 +2,28 @@
 
 # Changelog
 
+## 0.3.0
+
+1. **Log which subscription is tried** when OpenCode prints logs:
+
+   ```bash
+   opencode run --print-logs --log-level INFO -m subrouter/default 'Reply with one word: ping'
+   ```
+
+   ```
+   trying openai/gpt-5.5 #1 (work@x.com)
+   failover openai/gpt-5.5 #1 (work@x.com) error="The usage limit has been reached"
+   trying openai/gpt-5.5 #2 (personal@x.com)
+   ```
+
+2. **Show the live routed model** as `subrouter.org`. Preset names include the current candidate, for example `default (claude-opus-4-6)`. Context limits follow that candidate. The powered-by system line uses the live `provider/model` id, not the preset name.
+
+3. **Wait out cooldowns instead of dying** when every Subrouter account is cooling down. OpenCode receives a retryable 429 with `retry-after` and continues the session after the wait.
+
+4. **Pass image and PDF inputs through OpenCode** so attachments reach the routed provider.
+
+5. **Use `opencode-go` for the OpenCode Go plan.** Existing `opencode` accounts are copied to `opencode-go` on first load.
+
 ## 0.2.0
 
 1. **Add subscriptions without leaving OpenCode:** the plugin now provides an auth flow for every Subrouter provider. Run OpenCode's auth login, choose Subrouter, then select the subscription to add:

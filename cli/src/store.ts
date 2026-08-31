@@ -6,6 +6,9 @@
  * and a lock directory for cross-process safety. Cooldown state is global on
  * purpose: when a subscription hits a rate limit, every process and harness
  * on the machine should stop retrying it until the cooldown expires.
+ * 0.3.0 used accounts.json, presets.json, state.json, and login-*.json.
+ * Those files are read until the next write, then replaced by config.json.
+ * Provider id `opencode` is copied to `opencode-go` on that load.
  */
 
 import * as errore from 'errore'
@@ -201,15 +204,89 @@ function normalizeLogins(input: Partial<ConfigFile['logins']> | undefined): Conf
   return logins
 }
 
-async function loadConfigUnlocked(): Promise<ConfigFile> {
-  const raw = await readJson<Partial<ConfigFile> | null>(configFilePath(), null)
+function takeOpencodeGo<T>(input: Record<string, T> | undefined) {
+  if (!input) return input
+  const next = { ...input }
+  if (next.opencode != null && next['opencode-go'] == null) next['opencode-go'] = next.opencode
+  delete next.opencode
+  return next
+}
+
+function remapOpencodePresets(input: Partial<ConfigFile['presets']> | undefined) {
+  const presets: Partial<ConfigFile['presets']> = {}
+  for (const [name, models] of Object.entries(input ?? {})) {
+    if (!Array.isArray(models)) continue
+    presets[name] = models.map((entry) =>
+      typeof entry === 'string' && entry.startsWith('opencode/')
+        ? `opencode-go/${entry.slice('opencode/'.length)}`
+        : entry,
+    )
+  }
+  return presets
+}
+
+function remapOpencodeCooldowns(input: Partial<ConfigFile['cooldowns']> | undefined) {
+  const cooldowns: Partial<ConfigFile['cooldowns']> = {}
+  for (const [key, until] of Object.entries(input ?? {})) {
+    const next = key.startsWith('opencode:') ? `opencode-go:${key.slice('opencode:'.length)}` : key
+    if (cooldowns[next] == null) cooldowns[next] = until
+  }
+  return cooldowns
+}
+
+async function loadLegacyConfig(): Promise<Partial<ConfigFile> | null> {
+  const accounts = await readJson<Partial<AccountsFile> | null>(
+    path.join(subrouterHome(), 'accounts.json'),
+    null,
+  )
+  const presets = await readJson<Partial<PresetsFile> | null>(
+    path.join(subrouterHome(), 'presets.json'),
+    null,
+  )
+  const state = await readJson<Partial<StateFile> | null>(path.join(subrouterHome(), 'state.json'), null)
+  const logins: Record<string, LoginState> = {}
+  for (const id of ['opencode', ...PROVIDER_IDS]) {
+    const entry = await readJson<LoginState | null>(path.join(subrouterHome(), `login-${id}.json`), null)
+    if (entry) logins[id] = entry
+  }
+  if (!accounts && !presets && !state && Object.keys(logins).length === 0) return null
+  return {
+    providers: accounts?.providers,
+    presets: presets?.presets,
+    cooldowns: state?.cooldowns,
+    logins,
+  }
+}
+
+function configFromRaw(raw: Partial<ConfigFile> | null): ConfigFile {
   return {
     version: 1,
-    providers: normalizeProviders(raw?.providers),
-    presets: normalizePresets(raw?.presets),
-    cooldowns: normalizeCooldowns(raw?.cooldowns),
-    logins: normalizeLogins(raw?.logins),
+    providers: normalizeProviders(takeOpencodeGo(raw?.providers)),
+    presets: normalizePresets(remapOpencodePresets(raw?.presets)),
+    cooldowns: normalizeCooldowns(remapOpencodeCooldowns(raw?.cooldowns)),
+    logins: normalizeLogins(takeOpencodeGo(raw?.logins)),
   }
+}
+
+async function loadConfigUnlocked(): Promise<ConfigFile> {
+  const raw = await readJson<Partial<ConfigFile> | null>(configFilePath(), null)
+  if (raw) return configFromRaw(raw)
+  return configFromRaw(await loadLegacyConfig())
+}
+
+async function removeLegacyStateFiles() {
+  const names = await fs.readdir(subrouterHome()).catch(() => [])
+  await Promise.all(
+    names
+      .filter(
+        (name) =>
+          name === 'accounts.json' ||
+          name === 'presets.json' ||
+          name === 'state.json' ||
+          (name.startsWith('login-') && name.endsWith('.json')),
+      )
+      .map((name) => fs.rm(path.join(subrouterHome(), name), { force: true })),
+  )
 }
 
 async function saveConfigUnlocked(file: ConfigFile) {
@@ -220,6 +297,7 @@ async function saveConfigUnlocked(file: ConfigFile) {
     cooldowns: file.cooldowns,
     logins: file.logins,
   })
+  await removeLegacyStateFiles()
 }
 
 export async function loadAccounts(): Promise<AccountsFile> {

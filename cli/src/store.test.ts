@@ -126,6 +126,62 @@ describe('accounts', () => {
     expect(JSON.parse(await readFile(configFilePath(), 'utf8')).$schema).toBe(SCHEMA_URL)
   })
 
+  test('merges split 0.3.0 state files into config.json on first load', async () => {
+    await writeFile(
+      path.join(home, 'accounts.json'),
+      JSON.stringify({
+        version: 1,
+        providers: {
+          anthropic: { activeIndex: 0, accounts: [oauthAccount({ email: 'a@x.com' })] },
+          opencode: {
+            activeIndex: 0,
+            accounts: [{ type: 'api', key: 'go-key', addedAt: 1, lastUsed: 1 }],
+          },
+        },
+      }) + '\n',
+    )
+    await writeFile(
+      path.join(home, 'presets.json'),
+      JSON.stringify({
+        version: 1,
+        presets: { work: ['anthropic/claude-opus-4-6', 'opencode/grok-4.6'] },
+      }) + '\n',
+    )
+    await writeFile(
+      path.join(home, 'state.json'),
+      JSON.stringify({ version: 1, cooldowns: { 'anthropic:a@x.com': Date.now() + 60_000 } }) + '\n',
+    )
+    await writeFile(
+      path.join(home, 'login-openai.json'),
+      JSON.stringify({
+        provider: 'openai',
+        status: 'pending',
+        url: 'https://auth.openai.com/example',
+      }) + '\n',
+    )
+
+    const accounts = await loadAccounts()
+    const presets = await loadPresets()
+    const state = await loadState()
+    const login = await loadLoginState('openai')
+
+    expect(accounts.providers.anthropic?.accounts.map((account) => account.email)).toEqual(['a@x.com'])
+    expect(accounts.providers['opencode-go']?.accounts.map((account) => account.key)).toEqual(['go-key'])
+    expect(presets.presets).toEqual({ work: ['anthropic/claude-opus-4-6', 'opencode-go/grok-4.6'] })
+    expect(state.cooldowns['anthropic:a@x.com']).toBeGreaterThan(Date.now())
+    expect(login?.status).toBe('pending')
+
+    await addAccount({
+      provider: 'xai',
+      account: oauthAccount({ refresh: 'x-refresh', access: 'x-access', email: 'x@x.com' }),
+    })
+    const config = JSON.parse(await readFile(configFilePath(), 'utf8'))
+    expect(config.providers.anthropic.accounts[0].email).toBe('a@x.com')
+    expect(config.providers['opencode-go'].accounts[0].key).toBe('go-key')
+    expect(config.presets.work).toEqual(['anthropic/claude-opus-4-6', 'opencode-go/grok-4.6'])
+    expect((await readdir(home)).sort()).toEqual(['config.json'])
+  })
+
   test('adding an account clears the provider login state', async () => {
     await saveLoginState({
       provider: 'anthropic',

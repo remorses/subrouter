@@ -2,6 +2,55 @@
 
 # Changelog
 
+## 0.4.0
+
+1. **Log which subscription is tried** when OpenCode prints logs. Cycle events go through `client.app.log`, never stdout:
+
+   ```
+   trying openai/gpt-5.5 #1 (work@x.com)
+   failover openai/gpt-5.5 #1 (work@x.com) error="The usage limit has been reached"
+   trying openai/gpt-5.5 #2 (personal@x.com)
+   ```
+
+   Pi has no log API, so those runs stay silent.
+
+2. **Set the fallback order inside one provider.** Pass every account email. The first email is tried first:
+
+   ```bash
+   npx @subrouter/cli account order --provider anthropic work@x.com personal@x.com
+   ```
+
+3. **Pick a subscription in the terminal** when you omit the provider. The same interactive prompt works for logout, account remove, preset show, and preset remove:
+
+   ```bash
+   npx @subrouter/cli login
+   npx @subrouter/cli logout
+   ```
+
+   Agents and non-interactive shells still need an explicit provider.
+
+4. **Honor the provider `retry-after` period** instead of waiting at least 5 minutes. A 30 second header cools for 30 seconds. `Retry-After: 0` or a past HTTP date means the account can be tried on the next request. Missing or invalid headers still default to 5 minutes. Exhausted balances still cool for 6 hours.
+
+5. **Start streaming as soon as the provider answers**, instead of waiting for the first visible token. Grok thinking used to look hung because Subrouter held the stream until the first token.
+
+6. **Use `opencode-go` for the OpenCode Go plan.** `opencode` is Zen pay-as-you-go on models.dev. Existing `providers.opencode` accounts, `opencode/...` presets, and matching cooldowns move to `opencode-go` on first load:
+
+   ```bash
+   npx @subrouter/cli login opencode-go
+   ```
+
+   Copy new keys from https://opencode.ai/auth.
+
+7. **Store accounts, presets, cooldowns, and logins in one `~/.subrouter/config.json`.** Older `accounts.json`, `presets.json`, `state.json`, and `login-*.json` files are merged on first load, then replaced. Editors can autocomplete from the `$schema` URL at https://subrouter.org/schema.json.
+
+8. **Keep ChatGPT follow-up turns working** by forcing Codex `store: false` on the AI SDK and the wire. OpenCode no longer hits `Items are not persisted when store is set to false` after a tool call.
+
+9. **Make browser login survivable from a chat window.** Background login prints the authorize URL again. `account status` stays unsuccessful until the in-flight login finishes. Manual Anthropic login no longer opens a localhost callback port. Replay a missed redirect with curl on the login machine; do not paste that URL into a shared chat.
+
+10. **Reject non-text models in presets** so image-only or audio-only catalog ids fail at `preset create` instead of at request time.
+
+11. **Fall back to HTTP when a Codex WebSocket cannot be used**, instead of failing the ChatGPT request.
+
 ## 0.3.0
 
 1. **Complete browser and device login without blocking agents:** login now continues in a background process in agent and non-interactive shells. Approve the displayed URL, then poll until the account is ready:
