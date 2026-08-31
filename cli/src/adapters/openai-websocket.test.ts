@@ -263,12 +263,6 @@ describe('OpenAI Codex WebSocket transport', () => {
       if (authorization === 'Bearer access-b') {
         socket.send(
           JSON.stringify({
-            type: 'response.created',
-            response: { id: 'limited-1', created_at: 1, model: 'gpt-test', service_tier: null },
-          }),
-        )
-        socket.send(
-          JSON.stringify({
             type: 'error',
             status: 429,
             headers: { 'retry-after': '600' },

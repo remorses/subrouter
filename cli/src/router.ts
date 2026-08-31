@@ -11,6 +11,10 @@
  * instead of dying. It only throws a hard error when nothing can be retried.
  * Cycle logs go through setSubrouterLog, never stdout. OpenCode wires that
  * to client.app.log. Pi has no log API, so those runs stay silent.
+ *
+ * doStream must return as soon as the HTTP stream exists. Waiting for the
+ * first content token (old inspectStream) made Grok look hung for the whole
+ * thinking window. Official OpenCode xAI has no such wait.
  */
 
 import type {
@@ -385,7 +389,10 @@ async function inspectStream({
     const next = await reader
       .read()
       .catch((error) => (error instanceof Error ? error : new Error(String(error))))
-    if (next instanceof Error) return { ok: false, error: next }
+    if (next instanceof Error) {
+      await reader.cancel(next).catch(() => {})
+      return { ok: false, error: next }
+    }
     if (next.done) {
       return {
         ok: true,
@@ -393,16 +400,18 @@ async function inspectStream({
       }
     }
     if (next.value.type === 'error') {
-      return {
-        ok: false,
-        error:
-          next.value.error instanceof Error
-            ? next.value.error
-            : new Error(String(next.value.error)),
-      }
+      const error =
+        next.value.error instanceof Error
+          ? next.value.error
+          : new Error(String(next.value.error))
+      await reader.cancel(error).catch(() => {})
+      return { ok: false, error }
     }
     buffered.push(next.value)
-    if (next.value.type === 'stream-start' || next.value.type === 'response-metadata') continue
+    // stream-start is local (TransformStream.start). Waiting past it for
+    // response-metadata or the first token holds TTFT for the whole thinking
+    // window on Grok. HTTP 429 still throws from doStream and failovers.
+    if (next.value.type === 'stream-start') continue
     return {
       ok: true,
       value: { ...result, stream: continueStream({ reader, buffered, onCommittedError }) },

@@ -5,7 +5,7 @@
  * cycles accounts and providers in order, recording cooldowns.
  */
 
-import { createServer, type Server } from 'node:http'
+import { createServer, type Server, type ServerResponse } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -27,7 +27,26 @@ type MockServer = {
   url: string
   requests: { path: string; authorization: string | undefined; body: string }[]
   close: () => Promise<void>
-  respond: (request: { path: string }) => MockResponse
+}
+
+async function listen(server: Server) {
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', () => {
+      resolve()
+    })
+  })
+  const address = server.address()
+  if (!address || typeof address === 'string') throw new Error('no address')
+  return {
+    url: `http://127.0.0.1:${address.port}`,
+    close: async () => {
+      await new Promise<void>((resolve) => {
+        server.close(() => {
+          resolve()
+        })
+      })
+    },
+  }
 }
 
 async function startMockServer(respond: (request: { path: string }) => MockResponse): Promise<MockServer> {
@@ -48,25 +67,36 @@ async function startMockServer(respond: (request: { path: string }) => MockRespo
       res.end(response.body)
     })
   })
-  await new Promise<void>((resolve) => {
-    server.listen(0, '127.0.0.1', () => {
-      resolve()
+  const listening = await listen(server)
+  return { ...listening, requests }
+}
+
+async function startChatSseServer({
+  onHeaders,
+  writeBody,
+}: {
+  onHeaders?: () => void
+  writeBody: (res: ServerResponse) => void
+}): Promise<MockServer> {
+  const requests: MockServer['requests'] = []
+  const server: Server = createServer((req, res) => {
+    let body = ''
+    req.on('data', (chunk) => {
+      body += String(chunk)
+    })
+    req.on('end', () => {
+      requests.push({
+        path: req.url ?? '',
+        authorization: req.headers.authorization,
+        body,
+      })
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      onHeaders?.()
+      writeBody(res)
     })
   })
-  const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('no address')
-  return {
-    url: `http://127.0.0.1:${address.port}`,
-    requests,
-    respond,
-    close: async () => {
-      await new Promise<void>((resolve) => {
-        server.close(() => {
-          resolve()
-        })
-      })
-    },
-  }
+  const listening = await listen(server)
+  return { ...listening, requests }
 }
 
 const anthropic429: MockResponse = {
@@ -365,6 +395,61 @@ describe('RouterModel failover', () => {
 
     const active = await resolveActiveCandidate('test')
     expect(active).toMatchObject({ provider: 'opencode-go', modelId: 'fake-model' })
+  })
+
+  test('doStream returns after HTTP headers, not after the first content token', async () => {
+    const contentGate = Promise.withResolvers<void>()
+    const opencodeMock = await startChatSseServer({
+      writeBody: (res) => {
+        res.write(
+          `data: ${JSON.stringify({
+            id: 'chatcmpl-1',
+            object: 'chat.completion.chunk',
+            created: 1,
+            model: 'fake-model',
+            choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+          })}\n\n`,
+        )
+        void contentGate.promise.then(() => {
+          res.write(
+            `data: ${JSON.stringify({
+              id: 'chatcmpl-1',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'fake-model',
+              choices: [{ index: 0, delta: { content: 'hello' }, finish_reason: null }],
+            })}\n\n`,
+          )
+          res.write(
+            `data: ${JSON.stringify({
+              id: 'chatcmpl-1',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'fake-model',
+              choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+            })}\n\n`,
+          )
+          res.end('data: [DONE]\n\n')
+        })
+      },
+    })
+    servers = [opencodeMock]
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['opencode-go/fake-model'] })
+
+    const result = await new RouterModel({ preset: 'test' }).doStream(callOptions)
+    contentGate.resolve()
+
+    const parts: string[] = []
+    for await (const part of result.stream) {
+      if (part.type === 'text-delta') parts.push(part.delta)
+    }
+    expect(parts.join('')).toBe('hello')
   })
 
   test('missing preset throws PresetNotFoundError', async () => {
