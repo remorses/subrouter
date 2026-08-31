@@ -14,12 +14,14 @@ import { APICallError, type LanguageModelV3CallOptions } from '@ai-sdk/provider'
 import {
   AllCandidatesExhaustedError,
   createSubrouter,
+  filterPresetModelsByInput,
   NoUsableAccountError,
+  requiredInputModalities,
   resolveActiveCandidate,
   resolveCandidates,
   RouterModel,
 } from './router.ts'
-import { type SubrouterLogEntry } from './adapters/index.ts'
+import { parseModelsDevCatalog, type SubrouterLogEntry } from './adapters/index.ts'
 import { addAccount, loadState, markCooldown, savePreset, type StoredAccount } from './store.ts'
 
 type MockResponse = { status: number; headers?: Record<string, string>; body: string }
@@ -145,6 +147,94 @@ const callOptions: LanguageModelV3CallOptions = {
 let home: string
 let servers: MockServer[] = []
 
+test('PDF calls keep only preset models that can encode PDF input', () => {
+  const emptyProvider = { models: {} }
+  const model = (input: string[]) => ({
+    id: 'model',
+    attachment: true,
+    modalities: { input, output: ['text'] },
+  })
+  const catalog = parseModelsDevCatalog({
+    anthropic: emptyProvider,
+    openai: { models: { model: model(['text', 'image', 'pdf']) } },
+    xai: { models: { model: model(['text', 'image', 'pdf']) } },
+    'opencode-go': emptyProvider,
+    'github-copilot': emptyProvider,
+    poe: emptyProvider,
+    'minimax-coding-plan': emptyProvider,
+    'kimi-for-coding': { models: { model: model(['text', 'image']) } },
+    'zai-coding-plan': emptyProvider,
+    'alibaba-coding-plan': emptyProvider,
+  })
+  if (catalog instanceof Error) throw catalog
+  const required = requiredInputModalities({
+    prompt: [
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'read this' },
+          {
+            type: 'file',
+            filename: 'document.pdf',
+            mediaType: 'application/pdf',
+            data: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+          },
+        ],
+      },
+    ],
+  })
+
+  expect(
+    filterPresetModelsByInput({
+      presetModels: ['openai/model', 'xai/model', 'kimi/model'],
+      required,
+      catalog,
+    }),
+  ).toEqual({
+    presetModels: ['openai/model'],
+    skipped: [
+      'xai/model: does not support pdf input',
+      'kimi/model: does not support pdf input',
+    ],
+  })
+})
+
+test('video calls skip Anthropic-compatible coding plans', () => {
+  const emptyProvider = { models: {} }
+  const videoModel = {
+    id: 'model',
+    attachment: true,
+    modalities: { input: ['text', 'image', 'video'], output: ['text'] },
+  }
+  const catalog = parseModelsDevCatalog({
+    anthropic: emptyProvider,
+    openai: emptyProvider,
+    xai: emptyProvider,
+    'opencode-go': emptyProvider,
+    'github-copilot': emptyProvider,
+    poe: emptyProvider,
+    'minimax-coding-plan': { models: { model: videoModel } },
+    'kimi-for-coding': { models: { model: videoModel } },
+    'zai-coding-plan': emptyProvider,
+    'alibaba-coding-plan': emptyProvider,
+  })
+  if (catalog instanceof Error) throw catalog
+
+  expect(
+    filterPresetModelsByInput({
+      presetModels: ['minimax/model', 'kimi/model'],
+      required: new Set(['text', 'video'] as const),
+      catalog,
+    }),
+  ).toEqual({
+    presetModels: [],
+    skipped: [
+      'minimax/model: does not support video input',
+      'kimi/model: does not support video input',
+    ],
+  })
+})
+
 beforeEach(async () => {
   home = await mkdtemp(path.join(tmpdir(), 'subrouter-router-'))
   process.env.SUBROUTER_HOME = home
@@ -153,6 +243,7 @@ beforeEach(async () => {
 afterEach(async () => {
   delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_ANTHROPIC_BASE_URL
+  delete process.env.SUBROUTER_MODELS_DEV_URL
   delete process.env.SUBROUTER_OPENCODE_GO_BASE_URL
   for (const server of servers) await server.close()
   servers = []
@@ -403,6 +494,70 @@ describe('RouterModel failover', () => {
     expect(retryAfterMs).toBeLessThanOrEqual(8_000)
   })
 
+  test('incompatible cooling models do not cause PDF retry loops', async () => {
+    const emptyProvider = { models: {} }
+    const modelsDev = await startMockServer(() => ({
+      status: 200,
+      body: JSON.stringify({
+        anthropic: emptyProvider,
+        openai: emptyProvider,
+        xai: {
+          models: {
+            grok: {
+              id: 'grok',
+              attachment: true,
+              modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+            },
+          },
+        },
+        'opencode-go': emptyProvider,
+        'github-copilot': emptyProvider,
+        poe: emptyProvider,
+        'minimax-coding-plan': emptyProvider,
+        'kimi-for-coding': {
+          models: {
+            kimi: {
+              id: 'kimi',
+              attachment: true,
+              modalities: { input: ['text', 'image'], output: ['text'] },
+            },
+          },
+        },
+        'zai-coding-plan': emptyProvider,
+        'alibaba-coding-plan': emptyProvider,
+      }),
+    }))
+    servers = [modelsDev]
+    process.env.SUBROUTER_MODELS_DEV_URL = modelsDev.url
+    const xai = oauthAccount({ refresh: 'xai-refresh', access: 'xai-access' })
+    const kimi: StoredAccount = { type: 'api', key: 'kimi-key', addedAt: 1, lastUsed: 1 }
+    await addAccount({ provider: 'xai', account: xai })
+    await addAccount({ provider: 'kimi', account: kimi })
+    await savePreset({ name: 'test', models: ['xai/grok', 'kimi/kimi'] })
+    await markCooldown({ provider: 'kimi', account: kimi, untilMs: Date.now() + 60_000 })
+
+    const result = await new RouterModel({ preset: 'test' })
+      .doGenerate({
+        prompt: [
+          {
+            role: 'user',
+            content: [
+              {
+                type: 'file',
+                filename: 'document.pdf',
+                mediaType: 'application/pdf',
+                data: new Uint8Array([0x25, 0x50, 0x44, 0x46]),
+              },
+            ],
+          },
+        ],
+      })
+      .catch((error: Error) => error)
+
+    expect(NoUsableAccountError.is(result)).toBe(true)
+    expect(APICallError.isInstance(result)).toBe(false)
+  })
+
   test('resolveActiveCandidate returns the first usable account', async () => {
     await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
     await addAccount({
@@ -430,6 +585,82 @@ describe('RouterModel failover', () => {
 
     const active = await resolveActiveCandidate('test')
     expect(active).toMatchObject({ provider: 'opencode-go', modelId: 'fake-model' })
+  })
+
+  test('reports when a cooldown starts a request on a fallback model', async () => {
+    const fallbackMock = await startMockServer(() => chatCompletionOk('fallback'))
+    servers = [fallbackMock]
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${fallbackMock.url}/v1`
+    const anthropic = oauthAccount({ email: 'a@x.com' })
+    await addAccount({ provider: 'anthropic', account: anthropic })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+    await markCooldown({ provider: 'anthropic', account: anthropic, untilMs: Date.now() + 60_000 })
+    const notices: unknown[] = []
+
+    await new RouterModel({
+      preset: 'test',
+      onCooldownFallback: (notice) => {
+        notices.push(notice)
+        return new Promise<void>(() => {})
+      },
+    }).doGenerate({
+      ...callOptions,
+      headers: {
+        'x-subrouter-session-id': 'session-1',
+        'x-subrouter-opencode-agent': 'build',
+        'x-subrouter-opencode-variant': 'high',
+      },
+    })
+
+    expect(notices).toEqual([
+      {
+        sessionID: 'session-1',
+        agent: 'build',
+        variant: 'high',
+        preset: 'test',
+        preferred: {
+          provider: 'anthropic',
+          modelId: 'claude-fake',
+          retryAfterMs: expect.any(Number),
+        },
+        active: { provider: 'opencode-go', modelId: 'fake-model' },
+      },
+    ])
+  })
+
+  test('does not report model fallback when another preferred-model account is live', async () => {
+    const anthropicMock = await startMockServer(() => ({
+      status: 200,
+      body: JSON.stringify({
+        id: 'msg_1',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'preferred' }],
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }),
+    }))
+    servers = [anthropicMock]
+    process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
+    const cooling = oauthAccount({ email: 'cooling@x.com' })
+    await addAccount({ provider: 'anthropic', account: cooling })
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'live@x.com' }) })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+    await markCooldown({ provider: 'anthropic', account: cooling, untilMs: Date.now() + 60_000 })
+    const notices: unknown[] = []
+
+    await new RouterModel({
+      preset: 'test',
+      onCooldownFallback: (notice) => {
+        notices.push(notice)
+      },
+    }).doGenerate(callOptions)
+
+    expect(notices).toEqual([])
   })
 
   test('doStream returns after HTTP headers, not after the first SSE event', async () => {

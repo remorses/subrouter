@@ -6,6 +6,8 @@
  */
 
 import {
+  OPENCODE_AGENT_HEADER,
+  OPENCODE_VARIANT_HEADER,
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
   PROVIDER_ID,
@@ -45,10 +47,24 @@ export async function revealRoutedModel({
 }
 
 export function addSubrouterHeaders(
-  input: { sessionID: string; agent: string; model: { providerID: string } },
+  input: {
+    sessionID: string
+    agent: string
+    model: { providerID: string }
+    message: {
+      agent: string
+      model: { providerID: string; modelID: string; variant?: string }
+    }
+  },
   output: { headers: Record<string, string> },
 ) {
   if (input.model.providerID !== PROVIDER_ID) return
   output.headers[OPENAI_WEBSOCKET_SESSION_HEADER] = input.sessionID
+  if (input.agent === input.message.agent) {
+    output.headers[OPENCODE_AGENT_HEADER] = input.message.agent
+    if (input.message.model.variant) {
+      output.headers[OPENCODE_VARIANT_HEADER] = input.message.model.variant
+    }
+  }
   if (input.agent === 'title') output.headers[OPENAI_WEBSOCKET_TITLE_HEADER] = 'true'
 }

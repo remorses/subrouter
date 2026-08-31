@@ -4,8 +4,9 @@
  * A RouterModel is an AI SDK LanguageModelV3 whose modelId is a preset name.
  * On every call it resolves the preset to an ordered list of candidates
  * (provider/model plus one entry per logged-in account), skips accounts in
- * cooldown, and delegates to the first usable underlying model. When a call
- * fails with a rate-limit/usage error, the account is put in cooldown
+ * cooldown, filters out models that cannot accept the prompt modalities, and
+ * delegates to the first usable underlying model. When a call fails with a
+ * rate-limit/usage error, the account is put in cooldown
  * (globally, in ~/.subrouter/config.json) and the next candidate is tried.
  * Cooling-down-only failures throw a retryable 429 so OpenCode waits
  * instead of dying. It only throws a hard error when nothing can be retried.
@@ -31,6 +32,9 @@ import {
   classifyFailure,
   emitLog,
   failureDetailsFromError,
+  loadModelsDevCatalog,
+  modelsDevInputModalities,
+  type ModelsDevCatalog,
   type SubrouterLog,
 } from './adapters/index.ts'
 import {
@@ -82,6 +86,8 @@ export const DEFAULT_PROVIDER_ORDER: ProviderId[] = [
 export const DEFAULT_PRESET_NAME = 'default'
 export const PROVIDER_ID = 'subrouter'
 export const PROVIDER_DISPLAY_NAME = 'subrouter.org'
+export const OPENCODE_AGENT_HEADER = 'x-subrouter-opencode-agent'
+export const OPENCODE_VARIANT_HEADER = 'x-subrouter-opencode-variant'
 
 /** Builtin default preset: newest model of each provider, ranked. */
 export function builtinDefaultPreset() {
@@ -110,6 +116,77 @@ export type Candidate = {
   accountIndex: number
 }
 
+export type CooldownFallbackNotice = {
+  sessionID?: string
+  agent?: string
+  variant?: string
+  preset: string
+  preferred: {
+    provider: ProviderId
+    modelId: string
+    retryAfterMs: number
+  }
+  active: {
+    provider: ProviderId
+    modelId: string
+  }
+}
+
+type CoolingCandidate = Candidate & { until: number }
+
+export type InputModality = 'text' | 'audio' | 'image' | 'video' | 'pdf'
+
+function mediaTypeModality(mediaType: string): InputModality | null {
+  if (mediaType === 'application/pdf') return 'pdf'
+  const topLevel = mediaType.split('/', 1)[0]
+  if (topLevel === 'audio' || topLevel === 'image' || topLevel === 'video') return topLevel
+  return null
+}
+
+export function requiredInputModalities(options: LanguageModelV3CallOptions) {
+  const required = new Set<InputModality>(['text'])
+  for (const message of options.prompt) {
+    if (!Array.isArray(message.content)) continue
+    for (const part of message.content) {
+      if (part.type !== 'file') continue
+      const modality = mediaTypeModality(part.mediaType)
+      if (modality) required.add(modality)
+    }
+  }
+  return required
+}
+
+export function filterPresetModelsByInput({
+  presetModels,
+  required,
+  catalog,
+}: {
+  presetModels: string[]
+  required: Set<InputModality>
+  catalog: ModelsDevCatalog | Error
+}) {
+  if (catalog instanceof Error || required.size === 1) return { presetModels, skipped: [] }
+  const compatible: string[] = []
+  const skipped: string[] = []
+  for (const entry of presetModels) {
+    const slash = entry.indexOf('/')
+    const provider = entry.slice(0, slash)
+    const modelId = entry.slice(slash + 1)
+    if (slash <= 0 || !isProviderId(provider)) {
+      compatible.push(entry)
+      continue
+    }
+    const input = modelsDevInputModalities({ provider, modelId, catalog })
+    const missing = input ? [...required].filter((modality) => !input.includes(modality)) : []
+    if (missing.length === 0) {
+      compatible.push(entry)
+      continue
+    }
+    skipped.push(`${entry}: does not support ${missing.join(', ')} input`)
+  }
+  return { presetModels: compatible, skipped }
+}
+
 /**
  * Expand preset entries into per-account candidates, skipping accounts in
  * cooldown. Accounts are tried starting from the pool's activeIndex.
@@ -120,10 +197,16 @@ export async function resolveCandidates({
 }: {
   presetModels: string[]
   now?: number
-}): Promise<{ candidates: Candidate[]; skipped: string[]; retryAfterMs?: number }> {
+}): Promise<{
+  candidates: Candidate[]
+  coolingDown: CoolingCandidate[]
+  skipped: string[]
+  retryAfterMs?: number
+}> {
   const accounts = await loadAccounts()
   const state = await loadState()
   const candidates: Candidate[] = []
+  const coolingDown: CoolingCandidate[] = []
   const skipped: string[] = []
   let retryAfterMs: number | undefined
 
@@ -152,6 +235,7 @@ export async function resolveCandidates({
         if (typeof until === 'number') {
           const remaining = until - now
           if (remaining > 0) {
+            coolingDown.push({ provider, modelId, account, accountIndex, until })
             retryAfterMs = retryAfterMs === undefined ? remaining : Math.min(retryAfterMs, remaining)
           }
         }
@@ -161,7 +245,7 @@ export async function resolveCandidates({
     }
   }
 
-  return { candidates, skipped, retryAfterMs }
+  return { candidates, coolingDown, skipped, retryAfterMs }
 }
 
 // OpenCode only retries APICallError with isRetryable. A tagged NoUsableAccountError
@@ -242,6 +326,7 @@ export type RouterModelArgs = {
   /** preset name, exposed as the modelId */
   preset: string
   onEvent?: (event: RouterEvent) => void
+  onCooldownFallback?: (notice: CooldownFallbackNotice) => void | Promise<void>
   log?: SubrouterLog
 }
 
@@ -251,11 +336,13 @@ export class RouterModel implements LanguageModelV3 {
   readonly modelId: string
   readonly supportedUrls: Record<string, RegExp[]> = {}
   private onEvent?: (event: RouterEvent) => void
+  private onCooldownFallback?: (notice: CooldownFallbackNotice) => void | Promise<void>
   private log?: SubrouterLog
 
   constructor(args: RouterModelArgs) {
     this.modelId = args.preset
     this.onEvent = args.onEvent
+    this.onCooldownFallback = args.onCooldownFallback
     this.log = args.log
   }
 
@@ -274,28 +361,106 @@ export class RouterModel implements LanguageModelV3 {
     })
   }
 
-  private async withFailover<T>(
-    run: (model: LanguageModelV3, candidate: Candidate) => PromiseLike<T>,
-    inspect: (value: T, candidate: Candidate) => Promise<Attempt<T>> = async (value) => ({
-      ok: true,
-      value,
-    }),
-  ): Promise<T> {
+  private reportCooldownFallback({
+    presetModels,
+    candidates,
+    coolingDown,
+    options,
+  }: {
+    presetModels: string[]
+    candidates: Candidate[]
+    coolingDown: CoolingCandidate[]
+    options: LanguageModelV3CallOptions
+  }) {
+    if (!this.onCooldownFallback) return
+    const preferredEntry = presetModels[0]
+    if (!preferredEntry) return
+    const slash = preferredEntry.indexOf('/')
+    if (slash <= 0) return
+    const provider = preferredEntry.slice(0, slash)
+    if (!isProviderId(provider)) return
+    const modelId = preferredEntry.slice(slash + 1)
+    const isPreferred = (candidate: Pick<Candidate, 'provider' | 'modelId'>) =>
+      candidate.provider === provider && candidate.modelId === modelId
+    if (candidates.some(isPreferred)) return
+    const preferredCooldowns = coolingDown.filter(isPreferred)
+    const active = candidates[0]
+    if (!active || preferredCooldowns.length === 0) return
+
+    const headers = new Headers()
+    for (const [key, value] of Object.entries(options.headers ?? {})) {
+      if (value !== undefined) headers.set(key, value)
+    }
+    const notice: CooldownFallbackNotice = {
+      sessionID: headers.get(OPENAI_WEBSOCKET_SESSION_HEADER) ?? undefined,
+      agent: headers.get(OPENCODE_AGENT_HEADER) ?? undefined,
+      variant: headers.get(OPENCODE_VARIANT_HEADER) ?? undefined,
+      preset: this.modelId,
+      preferred: {
+        provider,
+        modelId,
+        retryAfterMs: Math.max(1, Math.min(...preferredCooldowns.map((item) => item.until - Date.now()))),
+      },
+      active: { provider: active.provider, modelId: active.modelId },
+    }
+    void Promise.resolve()
+      .then(() => this.onCooldownFallback!(notice))
+      .catch((cause) => {
+        const error = cause instanceof Error ? cause : new Error(String(cause))
+        emitLog(this.log, {
+          level: 'warn',
+          message: 'failed to report cooldown fallback',
+          extra: { error: error.message },
+        })
+      })
+  }
+
+  private async withFailover<T>({
+    options,
+    run,
+    inspect = async (value) => ({ ok: true, value }),
+  }: {
+    options: LanguageModelV3CallOptions
+    run: (model: LanguageModelV3, candidate: Candidate) => PromiseLike<T>
+    inspect?: (value: T, candidate: Candidate) => Promise<Attempt<T>>
+  }): Promise<T> {
     const presetModels = await resolvePresetModels(this.modelId)
     if (presetModels instanceof Error) throw presetModels
 
-    const { candidates, skipped, retryAfterMs } = await resolveCandidates({ presetModels })
+    const required = requiredInputModalities(options)
+    const compatible =
+      required.size === 1
+        ? { presetModels, skipped: [] }
+        : filterPresetModelsByInput({
+            presetModels,
+            required,
+            catalog: await loadModelsDevCatalog({ log: this.log }),
+          })
+    const resolved = await resolveCandidates({ presetModels: compatible.presetModels })
+    const candidates = resolved.candidates
+    const skipped = [...compatible.skipped, ...resolved.skipped]
     for (const reason of skipped) {
       emitLog(this.log, { level: 'info', message: `skip ${reason}` })
     }
     if (candidates.length === 0) {
       const reason = skipped.length > 0 ? skipped.join('; ') : 'no providers configured'
       const error = new NoUsableAccountError({ preset: this.modelId, reason })
-      if (retryAfterMs !== undefined) {
-        throw cooldownRetryError({ message: error.message, retryAfterMs, cause: error })
+      if (resolved.retryAfterMs !== undefined) {
+        throw cooldownRetryError({
+          message: error.message,
+          retryAfterMs: resolved.retryAfterMs,
+          cause: error,
+        })
       }
       throw error
     }
+
+    this.reportCooldownFallback({
+      presetModels: compatible.presetModels,
+      candidates,
+      coolingDown: resolved.coolingDown,
+      options,
+    })
 
     const attempts: string[] = []
     let soonestRetryAfterMs: number | undefined
@@ -362,20 +527,22 @@ export class RouterModel implements LanguageModelV3 {
   }
 
   async doGenerate(options: LanguageModelV3CallOptions) {
-    return this.withFailover((model, candidate) =>
-      model.doGenerate(candidateCallOptions({ options, candidate })),
-    )
+    return this.withFailover({
+      options,
+      run: (model, candidate) => model.doGenerate(candidateCallOptions({ options, candidate })),
+    })
   }
 
   async doStream(options: LanguageModelV3CallOptions) {
-    return this.withFailover(
-      (model, candidate) => model.doStream(candidateCallOptions({ options, candidate })),
-      (result, candidate) =>
+    return this.withFailover({
+      options,
+      run: (model, candidate) => model.doStream(candidateCallOptions({ options, candidate })),
+      inspect: (result, candidate) =>
         inspectStream({
           result,
-          onCommittedError: (error) => recordStreamCooldown({ candidate, error }),
+          onCommittedError: (error, replaySafe) => recordStreamCooldown({ candidate, error, replaySafe }),
         }),
-    )
+    })
   }
 }
 
@@ -384,7 +551,7 @@ async function inspectStream({
   onCommittedError,
 }: {
   result: LanguageModelV3StreamResult
-  onCommittedError: (error: Error) => Promise<void>
+  onCommittedError: (error: Error, replaySafe: boolean) => Promise<Error>
 }): Promise<Attempt<LanguageModelV3StreamResult>> {
   const reader = result.stream.getReader()
   const buffered: LanguageModelV3StreamPart[] = []
@@ -420,6 +587,10 @@ async function inspectStream({
   }
 }
 
+function isReplaySafePart(part: LanguageModelV3StreamPart) {
+  return part.type === 'stream-start' || part.type === 'response-metadata'
+}
+
 function continueStream({
   reader,
   buffered,
@@ -427,27 +598,29 @@ function continueStream({
 }: {
   reader: ReadableStreamDefaultReader<LanguageModelV3StreamPart>
   buffered: LanguageModelV3StreamPart[]
-  onCommittedError: (error: Error) => Promise<void>
+  onCommittedError: (error: Error, replaySafe: boolean) => Promise<Error>
 }) {
-  let recordedCooldown = false
+  let recordedError: Error | undefined
+  let replaySafe = true
   const record = async (error: Error) => {
-    if (recordedCooldown) return
-    await onCommittedError(error)
-    recordedCooldown = true
+    if (recordedError) return recordedError
+    recordedError = await onCommittedError(error, replaySafe)
+    return recordedError
   }
   let bufferedIndex = 0
   return new ReadableStream<LanguageModelV3StreamPart>({
     async pull(controller) {
       if (bufferedIndex < buffered.length) {
-        controller.enqueue(buffered[bufferedIndex++]!)
+        const part = buffered[bufferedIndex++]!
+        if (!isReplaySafePart(part)) replaySafe = false
+        controller.enqueue(part)
         return
       }
       const next = await reader
         .read()
         .catch((error) => (error instanceof Error ? error : new Error(String(error))))
       if (next instanceof Error) {
-        await record(next)
-        controller.error(next)
+        controller.error(await record(next))
         return
       }
       if (next.done) {
@@ -455,25 +628,47 @@ function continueStream({
         return
       }
       if (next.value.type === 'error') {
-        await record(
+        const error =
           next.value.error instanceof Error
             ? next.value.error
-            : new Error(String(next.value.error)),
-        )
+            : new Error(String(next.value.error))
+        controller.enqueue({ ...next.value, error: await record(error) })
+        return
       }
+      if (!isReplaySafePart(next.value)) replaySafe = false
       controller.enqueue(next.value)
     },
     cancel: reader.cancel.bind(reader),
   })
 }
 
-async function recordStreamCooldown({ candidate, error }: { candidate: Candidate; error: Error }) {
-  const action = classifyFailure(failureDetailsFromError(error))
-  if (!action) return
+async function recordStreamCooldown({
+  candidate,
+  error,
+  replaySafe,
+}: {
+  candidate: Candidate
+  error: Error
+  replaySafe: boolean
+}) {
+  const details = failureDetailsFromError(error)
+  const action = classifyFailure(details)
+  if (!action) return error
   await markCooldown({
     provider: candidate.provider,
     account: candidate.account,
     untilMs: Date.now() + action.cooldownMs,
+  })
+  if (!replaySafe) return error
+  return new APICallError({
+    message: error.message,
+    url: APICallError.isInstance(error) ? error.url : 'https://subrouter.local/retry',
+    requestBodyValues: APICallError.isInstance(error) ? error.requestBodyValues : {},
+    statusCode: details.statusCode,
+    responseHeaders: details.headers,
+    responseBody: details.body,
+    isRetryable: true,
+    cause: error,
   })
 }
 
@@ -492,6 +687,8 @@ function candidateCallOptions({
   const title = headers.get(OPENAI_WEBSOCKET_TITLE_HEADER)
   headers.delete(OPENAI_WEBSOCKET_SESSION_HEADER)
   headers.delete(OPENAI_WEBSOCKET_TITLE_HEADER)
+  headers.delete(OPENCODE_AGENT_HEADER)
+  headers.delete(OPENCODE_VARIANT_HEADER)
   if (candidate.provider === 'openai' && sessionId) {
     headers.set(OPENAI_WEBSOCKET_SESSION_HEADER, sessionId)
   }
@@ -505,14 +702,21 @@ function candidateCallOptions({
  * first export starting with `create`, then `sdk.languageModel(modelId)`.
  */
 export function createSubrouter(
-  options: { onEvent?: (event: RouterEvent) => void; log?: SubrouterLog } = {},
+  options: {
+    onEvent?: (event: RouterEvent) => void
+    onCooldownFallback?: (notice: CooldownFallbackNotice) => void | Promise<void>
+    log?: SubrouterLog
+  } = {},
 ) {
+  const model = (preset: string) =>
+    new RouterModel({
+      preset,
+      onEvent: options.onEvent,
+      onCooldownFallback: options.onCooldownFallback,
+      log: options.log,
+    })
   return {
-    languageModel(presetName: string) {
-      return new RouterModel({ preset: presetName, onEvent: options.onEvent, log: options.log })
-    },
-    chat(presetName: string) {
-      return new RouterModel({ preset: presetName, onEvent: options.onEvent, log: options.log })
-    },
+    languageModel: model,
+    chat: model,
   }
 }
