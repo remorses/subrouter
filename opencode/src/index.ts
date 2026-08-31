@@ -6,8 +6,9 @@
  * URL, so opencode never installs anything). Each subrouter preset becomes a
  * model: pick `subrouter/default` (or any preset created with
  * `subrouter preset create`) in opencode. Provider id stays `subrouter`; the
- * visible name is `subrouter.org`. Model names, context limits, and
- * `experimental.chat.system.transform` follow the first live routed candidate.
+ * visible name is `subrouter.org`. Context limits follow the first live
+ * candidate. Input modalities cover every usable candidate so the
+ * router can select a compatible subscription for each prompt.
  *
  * `subrouterAuthPlugin` registers the login flow, so `opencode auth login`
  * (and any harness driving opencode's auth hook, like kimaki's Discord
@@ -26,11 +27,15 @@ import {
   isProviderId,
   loadModelsDevCatalog,
   loadPresets,
+  modelsDevInputModalities,
   modelsDevLimit,
+  modelsDevModel,
   PROVIDER_DISPLAY_NAME,
   PROVIDER_ID,
   PROVIDER_IDS,
-  resolveActiveCandidate,
+  resolveCandidates,
+  resolvePresetModels,
+  type CooldownFallbackNotice,
   type StoredAccount,
   type SubrouterLog,
 } from '@subrouter/cli'
@@ -56,8 +61,24 @@ function opencodeLog(client: PluginInput['client'] | undefined): SubrouterLog | 
   }
 }
 
-export const subrouterPlugin: Plugin = async ({ client }) => {
+export const subrouterPlugin: Plugin = async ({ client, directory }) => {
   const log = opencodeLog(client)
+  const pendingNotices = new Map<
+    string,
+    { agent: string; variant?: string; preset: string; text: string }
+  >()
+  const onCooldownFallback = (notice: CooldownFallbackNotice) => {
+    if (!client || !notice.sessionID || !notice.agent || notice.agent === 'title') return
+    if (pendingNotices.has(notice.sessionID)) return
+    const preferred = `${notice.preferred.provider}/${notice.preferred.modelId}`
+    const active = `${notice.active.provider}/${notice.active.modelId}`
+    pendingNotices.set(notice.sessionID, {
+      agent: notice.agent,
+      variant: notice.variant,
+      preset: notice.preset,
+      text: `Subrouter: ${preferred} was rate limited. This message started with ${active}.`,
+    })
+  }
   return {
     config: async (config) => {
       const presets = await loadPresets().catch(() => {
@@ -68,7 +89,12 @@ export const subrouterPlugin: Plugin = async ({ client }) => {
       const models = Object.fromEntries(
         await Promise.all(
           [...names].map(async (name) => {
-            const candidate = await resolveActiveCandidate(name)
+            const presetModels = await resolvePresetModels(name)
+            const candidates =
+              presetModels instanceof Error
+                ? []
+                : (await resolveCandidates({ presetModels })).candidates
+            const candidate = candidates[0]
             const limit = candidate
               ? modelsDevLimit({
                   provider: candidate.provider,
@@ -76,17 +102,32 @@ export const subrouterPlugin: Plugin = async ({ client }) => {
                   catalog,
                 })
               : null
+            const input = new Set<'text' | 'audio' | 'image' | 'video' | 'pdf'>(['text'])
+            let attachment = false
+            for (const current of candidates) {
+              const model = modelsDevModel({
+                provider: current.provider,
+                modelId: current.modelId,
+                catalog,
+              })
+              const modalities = modelsDevInputModalities({
+                provider: current.provider,
+                modelId: current.modelId,
+                catalog,
+              })
+              if (!model || !modalities) continue
+              attachment ||= model.attachment && modalities.some((modality) => modality !== 'text')
+              for (const modality of modalities) input.add(modality)
+            }
             return [
               name,
               {
-                name: candidate ? `${name} (${candidate.modelId})` : name,
+                name,
                 tool_call: true,
-                attachment: true,
+                attachment,
                 reasoning: false,
                 modalities: {
-                  input: ['text', 'image', 'pdf'] satisfies Array<
-                    'text' | 'image' | 'pdf'
-                  >,
+                  input: [...input],
                   output: ['text'] satisfies Array<'text'>,
                 },
                 cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
@@ -102,9 +143,29 @@ export const subrouterPlugin: Plugin = async ({ client }) => {
           name: PROVIDER_DISPLAY_NAME,
           npm: providerEntryUrl(),
           models,
-          options: log ? { log } : {},
+          options: { log, onCooldownFallback },
         },
       }
+    },
+    event: async ({ event }) => {
+      if (event.type !== 'session.idle') return
+      const pending = pendingNotices.get(event.properties.sessionID)
+      if (!pending) return
+      pendingNotices.delete(event.properties.sessionID)
+      const body = {
+        noReply: true,
+        agent: pending.agent,
+        model: { providerID: PROVIDER_ID, modelID: pending.preset },
+        variant: pending.variant,
+        parts: [{ type: 'text' as const, text: pending.text, ignored: true }],
+      }
+      await client.session
+        .prompt({
+          path: { id: event.properties.sessionID },
+          query: { directory },
+          body,
+        })
+        .catch(() => {})
     },
     'chat.headers': async (input, output) => addSubrouterHeaders(input, output),
     // OpenCode identity uses the preset id; rewrite it to the live routed model.

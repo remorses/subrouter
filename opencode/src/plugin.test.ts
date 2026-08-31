@@ -6,7 +6,7 @@ import path from 'node:path'
 import util from 'node:util'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
-import { createOpencodeClient } from '@opencode-ai/sdk'
+import { createOpencodeClient, type Event } from '@opencode-ai/sdk'
 import {
   addAccount,
   adapters,
@@ -51,7 +51,11 @@ async function startFakeModelsDev(
         string,
         {
           id: string
-          modalities?: { output?: string[] }
+          attachment?: boolean
+          reasoning?: boolean
+          temperature?: boolean
+          tool_call?: boolean
+          modalities?: { input?: string[]; output?: string[] }
           limit?: { context?: number; output?: number; input?: number }
         }
       >
@@ -176,6 +180,73 @@ test('provider log callback forwards only to client.app.log', async () => {
   })
 })
 
+test('cooldown fallback creates only a persisted ignored notice after idle', async () => {
+  const requests: Array<{ path: string; body: any }> = []
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    req.on('end', () => {
+      requests.push({
+        path: req.url ?? '',
+        body: JSON.parse(Buffer.concat(chunks).toString('utf8')),
+      })
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end('{}')
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  openServers.push(server)
+  const address = server.address()
+  if (typeof address === 'string' || !address) throw new Error('failed to bind notification server')
+  const client = createOpencodeClient({ baseUrl: `http://127.0.0.1:${address.port}` })
+  const hooks = await subrouterPlugin({ ...pluginInput, client, directory: '/tmp/project' })
+  const config: Config = {}
+  await hooks.config?.(config)
+  const onCooldownFallback = config.provider?.subrouter?.options?.onCooldownFallback
+  expect(onCooldownFallback).toBeTypeOf('function')
+  if (typeof onCooldownFallback !== 'function') throw new Error('expected cooldown callback')
+
+  await onCooldownFallback({
+    sessionID: 'session-1',
+    agent: 'build',
+    variant: 'high',
+    preset: 'work',
+    preferred: { provider: 'xai', modelId: 'grok-4.6', retryAfterMs: 252_000 },
+    active: { provider: 'openai', modelId: 'gpt-5.6-sol' },
+  })
+  await onCooldownFallback({
+    sessionID: 'session-1',
+    agent: 'compaction',
+    preset: 'work',
+    preferred: { provider: 'xai', modelId: 'grok-4.6', retryAfterMs: 251_000 },
+    active: { provider: 'anthropic', modelId: 'claude-sonnet-5' },
+  })
+  const event: Event = {
+    type: 'session.idle',
+    properties: { sessionID: 'session-1' },
+  }
+  await hooks.event?.({ event })
+
+  expect(requests).toEqual([
+    {
+      path: '/session/session-1/message?directory=%2Ftmp%2Fproject',
+      body: {
+        noReply: true,
+        agent: 'build',
+        model: { providerID: 'subrouter', modelID: 'work' },
+        variant: 'high',
+        parts: [
+          {
+            type: 'text',
+            text: 'Subrouter: xai/grok-4.6 was rate limited. This message started with openai/gpt-5.6-sol.',
+            ignored: true,
+          },
+        ],
+      },
+    },
+  ])
+})
+
 test('config hook registers the subrouter provider with preset models', async () => {
   await savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })
 
@@ -196,7 +267,7 @@ test('config hook registers the subrouter provider with preset models', async ()
   expect(provider.models.work.limit).toEqual({ context: 200_000, output: 64_000 })
 })
 
-test('preset model names show the first live candidate', async () => {
+test('preset model names stay stable when the routed candidate changes', async () => {
   await addAccount({
     provider: 'anthropic',
     account: {
@@ -216,7 +287,7 @@ test('preset model names show the first live candidate', async () => {
   await hooks.config?.(config)
 
   expect(config.provider?.subrouter?.name).toBe(PROVIDER_DISPLAY_NAME)
-  expect(config.provider?.subrouter?.models?.work?.name).toBe('work (claude-opus-4-6)')
+  expect(config.provider?.subrouter?.models?.work?.name).toBe('work')
 })
 
 test('preset model limits follow the first live candidate', async () => {
@@ -227,8 +298,8 @@ test('preset model limits follow the first live candidate', async () => {
       models: {
         [modelId]: {
           id: modelId,
-          modalities: { output: ['text'] },
-          limit: { context: 1_000_000, output: 128_000 },
+          modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+          limit: { context: 1_000_000, input: 900_000, output: 128_000 },
         },
       },
     },
@@ -253,23 +324,131 @@ test('preset model limits follow the first live candidate', async () => {
 
   expect(config.provider?.subrouter?.models?.work?.limit).toEqual({
     context: 1_000_000,
+    input: 900_000,
     output: 128_000,
   })
   expect(config.provider?.subrouter?.models?.default?.limit).toEqual({
     context: 1_000_000,
+    input: 900_000,
     output: 128_000,
   })
 })
 
-test('preset models permit image and PDF attachments', async () => {
+test('preset model input modalities are the union of usable candidates', async () => {
+  process.env.SUBROUTER_MODELS_DEV_URL = await startFakeModelsDev({
+    openai: {
+      models: {
+        'gpt-pdf': {
+          id: 'gpt-pdf',
+          attachment: true,
+          modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+        },
+      },
+    },
+    'kimi-for-coding': {
+      models: {
+        'kimi-image': {
+          id: 'kimi-image',
+          attachment: true,
+          modalities: { input: ['text', 'image'], output: ['text'] },
+        },
+      },
+    },
+  })
+  await addAccount({
+    provider: 'openai',
+    account: {
+      type: 'oauth',
+      access: 'access-1',
+      refresh: 'refresh-1',
+      expires: Date.now() + 60_000,
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await addAccount({
+    provider: 'kimi',
+    account: { type: 'api', key: 'kimi-key', addedAt: 1, lastUsed: 1 },
+  })
+  await savePreset({ name: 'work', models: ['openai/gpt-pdf', 'kimi/kimi-image'] })
+
   const hooks = await subrouterPlugin(pluginInput)
   const config: Config = {}
   await hooks.config?.(config)
 
-  expect(config.provider?.subrouter?.models?.default).toMatchObject({
+  expect(config.provider?.subrouter?.models?.work).toMatchObject({
     attachment: true,
     modalities: {
       input: ['text', 'image', 'pdf'],
+      output: ['text'],
+    },
+  })
+})
+
+test('xAI presets do not advertise inline PDF support that its SDK cannot encode', async () => {
+  process.env.SUBROUTER_MODELS_DEV_URL = await startFakeModelsDev({
+    xai: {
+      models: {
+        'grok-pdf': {
+          id: 'grok-pdf',
+          attachment: true,
+          modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+        },
+      },
+    },
+  })
+  await addAccount({
+    provider: 'xai',
+    account: {
+      type: 'oauth',
+      access: 'access-1',
+      refresh: 'refresh-1',
+      expires: Date.now() + 60_000,
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await savePreset({ name: 'work', models: ['xai/grok-pdf'] })
+
+  const hooks = await subrouterPlugin(pluginInput)
+  const config: Config = {}
+  await hooks.config?.(config)
+
+  expect(config.provider?.subrouter?.models?.work).toMatchObject({
+    attachment: true,
+    modalities: {
+      input: ['text', 'image'],
+      output: ['text'],
+    },
+  })
+})
+
+test('Anthropic-compatible coding plans do not advertise video input', async () => {
+  process.env.SUBROUTER_MODELS_DEV_URL = await startFakeModelsDev({
+    'kimi-for-coding': {
+      models: {
+        'kimi-video': {
+          id: 'kimi-video',
+          attachment: true,
+          modalities: { input: ['text', 'image', 'video'], output: ['text'] },
+        },
+      },
+    },
+  })
+  await addAccount({
+    provider: 'kimi',
+    account: { type: 'api', key: 'kimi-key', addedAt: 1, lastUsed: 1 },
+  })
+  await savePreset({ name: 'work', models: ['kimi/kimi-video'] })
+
+  const hooks = await subrouterPlugin(pluginInput)
+  const config: Config = {}
+  await hooks.config?.(config)
+
+  expect(config.provider?.subrouter?.models?.work).toMatchObject({
+    attachment: true,
+    modalities: {
+      input: ['text', 'image'],
       output: ['text'],
     },
   })

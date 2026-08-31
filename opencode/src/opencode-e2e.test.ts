@@ -19,6 +19,8 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
 import {
+  OPENCODE_AGENT_HEADER,
+  OPENCODE_VARIANT_HEADER,
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
   addAccount,
@@ -65,21 +67,21 @@ function summarizeSessionEvents(events: Event[]) {
 
 type MockServer = {
   url: string
-  requests: string[]
+  requests: Array<{ path: string; body: string }>
   close: () => Promise<void>
 }
 
 async function startMockServer(
   handler: (args: { path: string; body: string }, res: import('node:http').ServerResponse) => void,
 ): Promise<MockServer> {
-  const requests: string[] = []
+  const requests: MockServer['requests'] = []
   const server: Server = createServer((req, res) => {
     let body = ''
     req.on('data', (chunk) => {
       body += String(chunk)
     })
     req.on('end', () => {
-      requests.push(req.url ?? '')
+      requests.push({ path: req.url ?? '', body })
       handler({ path: req.url ?? '', body }, res)
     })
   })
@@ -110,6 +112,7 @@ function sseChunk(data: object) {
 let home: string
 let projectDir: string
 let anthropicMock: MockServer
+let modelsDevMock: MockServer
 let zenMock: MockServer
 let server: { url: string; close: () => void }
 const savedEnv: Record<string, string | undefined> = {}
@@ -170,6 +173,31 @@ beforeAll(async () => {
     res.end()
   })
 
+  modelsDevMock = await startMockServer((_request, res) => {
+    const emptyProvider = { models: {} }
+    const pdfModel = (id: string) => ({
+      id,
+      attachment: true,
+      modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+      limit: { context: 200_000, output: 64_000 },
+    })
+    res.writeHead(200, { 'content-type': 'application/json' })
+    res.end(
+      JSON.stringify({
+        anthropic: { models: { 'claude-opus-4-6': pdfModel('claude-opus-4-6') } },
+        openai: emptyProvider,
+        xai: emptyProvider,
+        'opencode-go': { models: { 'grok-4.6': pdfModel('grok-4.6') } },
+        'github-copilot': emptyProvider,
+        poe: emptyProvider,
+        'minimax-coding-plan': emptyProvider,
+        'kimi-for-coding': emptyProvider,
+        'zai-coding-plan': emptyProvider,
+        'alibaba-coding-plan': emptyProvider,
+      }),
+    )
+  })
+
   // Subrouter state: one rate-limited anthropic account + one zen key
   const subrouterHome = path.join(home, 'subrouter')
   await mkdir(subrouterHome, { recursive: true })
@@ -177,6 +205,7 @@ beforeAll(async () => {
   for (const [key, value] of Object.entries({
     SUBROUTER_HOME: subrouterHome,
     SUBROUTER_ANTHROPIC_BASE_URL: `${anthropicMock.url}/v1`,
+    SUBROUTER_MODELS_DEV_URL: modelsDevMock.url,
     SUBROUTER_OPENCODE_GO_BASE_URL: `${zenMock.url}/v1`,
     // Isolate opencode from the user's real global config and auth
     XDG_CONFIG_HOME: path.join(home, 'xdg-config'),
@@ -208,11 +237,15 @@ beforeAll(async () => {
   const providerEntry = pathToFileURL(
     path.join(import.meta.dirname, '..', 'dist', 'provider.js'),
   ).href
+  const pluginEntry = pathToFileURL(
+    path.join(import.meta.dirname, '..', 'dist', 'index.js'),
+  ).href
 
   server = await createOpencodeServer({
     port: 0,
     timeout: 60_000,
     config: {
+      plugin: [pluginEntry],
       provider: {
         subrouter: {
           name: 'Subrouter',
@@ -221,6 +254,8 @@ beforeAll(async () => {
             default: {
               name: 'subrouter default',
               tool_call: true,
+              attachment: true,
+              modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
               cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
               limit: { context: 200_000, output: 64_000 },
             },
@@ -234,6 +269,7 @@ beforeAll(async () => {
 afterAll(async () => {
   server?.close()
   await anthropicMock?.close()
+  await modelsDevMock?.close()
   await zenMock?.close()
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key]
@@ -250,20 +286,33 @@ describe('opencode + subrouter provider', () => {
         sessionID: 'session-1',
         agent: 'build',
         model: { providerID: 'subrouter' },
+        message: {
+          agent: 'build',
+          model: { providerID: 'subrouter', modelID: 'build', variant: 'high' },
+        },
       },
       output,
     )
-    expect(output.headers).toEqual({ [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-1' })
+    expect(output.headers).toEqual({
+      [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-1',
+      [OPENCODE_AGENT_HEADER]: 'build',
+      [OPENCODE_VARIANT_HEADER]: 'high',
+    })
 
+    const titleOutput = { headers: {} }
     addSubrouterHeaders(
       {
         sessionID: 'session-2',
         agent: 'title',
         model: { providerID: 'subrouter' },
+        message: {
+          agent: 'build',
+          model: { providerID: 'subrouter', modelID: 'build', variant: 'high' },
+        },
       },
-      output,
+      titleOutput,
     )
-    expect(output.headers).toEqual({
+    expect(titleOutput.headers).toEqual({
       [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-2',
       [OPENAI_WEBSOCKET_TITLE_HEADER]: 'true',
     })
@@ -297,6 +346,110 @@ describe('opencode + subrouter provider', () => {
     // The anthropic mock was tried first and rate limited
     expect(anthropicMock.requests.length).toBeGreaterThan(0)
     expect(zenMock.requests.length).toBeGreaterThan(0)
+  }, 120_000)
+
+  test('a pre-existing cooldown leaves a visible ignored route notice without another model turn', async () => {
+    const client = createOpencodeClient({ baseUrl: server.url })
+    const session = await client.session.create({
+      query: { directory: projectDir },
+      body: { title: 'subrouter route notice' },
+    })
+    expect(session.data).toBeTruthy()
+    const requestsBefore = zenMock.requests.length
+
+    const result = await client.session.prompt({
+      path: { id: session.data!.id },
+      query: { directory: projectDir },
+      body: {
+        model: { providerID: 'subrouter', modelID: 'default' },
+        parts: [{ type: 'text', text: 'say hi again' }],
+      },
+    })
+    expect(
+      (result.data?.parts ?? [])
+        .filter((part) => part.type === 'text')
+        .map((part) => part.text)
+        .join('\n'),
+    ).toContain('hello from fallback')
+
+    await expect
+      .poll(async () => {
+        const messages = await client.session.messages({
+          path: { id: session.data!.id },
+          query: { directory: projectDir },
+        })
+        return (messages.data ?? []).some(({ parts }) =>
+          parts.some(
+            (part) =>
+              part.type === 'text' &&
+              part.ignored === true &&
+              part.text.includes('was rate limited. This message started with opencode-go/'),
+          ),
+        )
+      })
+      .toBe(true)
+
+    const messages = await client.session.messages({
+      path: { id: session.data!.id },
+      query: { directory: projectDir },
+    })
+    const notice = (messages.data ?? []).find(({ parts }) =>
+      parts.some((part) => part.type === 'text' && part.ignored === true),
+    )
+    expect(notice?.info).toMatchObject({
+      role: 'user',
+      agent: 'build',
+      model: { providerID: 'subrouter', modelID: 'default' },
+    })
+    expect((messages.data ?? []).filter(({ info }) => info.role === 'assistant')).toHaveLength(1)
+    expect(zenMock.requests).toHaveLength(requestsBefore + 1)
+  }, 120_000)
+
+  test('PDF file parts reach a compatible fallback through opencode', async () => {
+    const client = createOpencodeClient({ baseUrl: server.url })
+    const session = await client.session.create({
+      query: { directory: projectDir },
+      body: { title: 'subrouter PDF e2e' },
+    })
+    expect(session.data).toBeTruthy()
+
+    const result = await client.session.prompt({
+      path: { id: session.data!.id },
+      query: { directory: projectDir },
+      body: {
+        model: { providerID: 'subrouter', modelID: 'default' },
+        parts: [
+          {
+            type: 'file',
+            filename: 'document.pdf',
+            mime: 'application/pdf',
+            url: `data:application/pdf;base64,${Buffer.from('%PDF-1.4\n%%EOF').toString('base64')}`,
+          },
+          { type: 'text', text: 'read the PDF' },
+        ],
+      },
+    })
+
+    const texts = (result.data?.parts ?? [])
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+    expect(texts).toContain('hello from fallback')
+    const request = zenMock.requests.at(-1)
+    expect(request).toBeTruthy()
+    const body = JSON.parse(request!.body) as {
+      messages: Array<{ content: Array<{ type: string; file?: { filename?: string } }> }>
+    }
+    expect(body.messages.at(-1)?.content).toEqual([
+      {
+        type: 'file',
+        file: {
+          filename: 'document.pdf',
+          file_data: `data:application/pdf;base64,${Buffer.from('%PDF-1.4\n%%EOF').toString('base64')}`,
+        },
+      },
+      { type: 'text', text: 'read the PDF' },
+    ])
   }, 120_000)
 
   test('all cooling-down accounts retry through opencode instead of dying', async () => {
