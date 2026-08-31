@@ -9,6 +9,7 @@ import {
   isPermanentRefreshFailure,
   loadModelsDevCatalog,
   modelsDevLimit,
+  modelsDevModel,
   parseModelsDevCatalog,
   validateModelsDevModelIds,
 } from './index.ts'
@@ -170,8 +171,16 @@ describe('models.dev validation', () => {
     anthropic: emptyProvider,
     openai: {
       models: {
-        'text-only': { id: 'text-only', modalities: { output: ['text'] } },
-        multimodal: { id: 'multimodal', modalities: { output: ['image', 'text'] } },
+        'text-only': {
+          id: 'text-only',
+          attachment: false,
+          modalities: { input: ['text'], output: ['text'] },
+        },
+        multimodal: {
+          id: 'multimodal',
+          attachment: true,
+          modalities: { input: ['text', 'image', 'pdf'], output: ['image', 'text'] },
+        },
         'image-only': { id: 'image-only', modalities: { output: ['image'] } },
         'audio-only': { id: 'audio-only', modalities: { output: ['audio'] } },
         'video-only': { id: 'video-only', modalities: { output: ['video'] } },
@@ -237,15 +246,19 @@ describe('models.dev validation', () => {
     ).toBeNull()
   })
 
-  test('looks up context and output limits for a text model', () => {
+  test('looks up model capabilities and limits', () => {
     const catalog = parseModelsDevCatalog({
       ...payload,
       openai: {
         models: {
           'text-only': {
             id: 'text-only',
-            modalities: { output: ['text'] },
-            limit: { context: 400_000, output: 32_000 },
+            attachment: true,
+            reasoning: true,
+            temperature: false,
+            tool_call: true,
+            modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+            limit: { context: 400_000, input: 360_000, output: 32_000 },
           },
         },
       },
@@ -253,12 +266,21 @@ describe('models.dev validation', () => {
     expect(catalog).not.toBeInstanceOf(Error)
     if (catalog instanceof Error) return
 
+    expect(modelsDevModel({ provider: 'openai', modelId: 'text-only', catalog })).toEqual({
+      attachment: true,
+      reasoning: true,
+      temperature: false,
+      toolCall: true,
+      modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
+      limit: { context: 400_000, input: 360_000, output: 32_000 },
+    })
     expect(
       modelsDevLimit({ provider: 'openai', modelId: 'text-only', catalog }),
-    ).toEqual({ context: 400_000, output: 32_000 })
+    ).toEqual({ context: 400_000, input: 360_000, output: 32_000 })
+    expect(modelsDevModel({ provider: 'openai', modelId: 'missing', catalog })).toBeNull()
     expect(modelsDevLimit({ provider: 'openai', modelId: 'missing', catalog })).toBeNull()
     expect(
-      modelsDevLimit({ provider: 'openai', modelId: 'text-only', catalog: new Error('offline') }),
+      modelsDevModel({ provider: 'openai', modelId: 'text-only', catalog: new Error('offline') }),
     ).toBeNull()
   })
 

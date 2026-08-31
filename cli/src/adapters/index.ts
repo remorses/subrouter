@@ -178,16 +178,24 @@ export class InvalidModelError extends errore.createTaggedError({
   message: 'Model $entry is not available as a text-output language model in models.dev',
 }) {}
 
+const modelsDevModalitySchema = z.enum(['text', 'audio', 'image', 'video', 'pdf'])
+
 const modelsDevLimitSchema = z.object({
   context: z.number().optional(),
+  input: z.number().optional(),
   output: z.number().optional(),
 })
 
 const modelsDevModelSchema = z.object({
   id: z.string(),
+  attachment: z.boolean().optional(),
+  reasoning: z.boolean().optional(),
+  temperature: z.boolean().optional(),
+  tool_call: z.boolean().optional(),
   modalities: z
     .object({
-      output: z.array(z.string()).optional(),
+      input: z.array(modelsDevModalitySchema).optional(),
+      output: z.array(modelsDevModalitySchema).optional(),
     })
     .optional(),
   limit: modelsDevLimitSchema.optional(),
@@ -195,14 +203,42 @@ const modelsDevModelSchema = z.object({
 
 export type ModelsDevLimit = {
   context: number
+  input?: number
   output: number
+}
+
+export type ModelsDevModel = {
+  attachment: boolean
+  reasoning: boolean
+  temperature: boolean
+  toolCall: boolean
+  modalities: {
+    input: Array<z.infer<typeof modelsDevModalitySchema>>
+    output: Array<z.infer<typeof modelsDevModalitySchema>>
+  }
+  limit: ModelsDevLimit | null
 }
 
 function catalogLimit(model: z.infer<typeof modelsDevModelSchema>): ModelsDevLimit | null {
   const context = model.limit?.context
   const output = model.limit?.output
   if (typeof context !== 'number' || typeof output !== 'number') return null
-  return { context, output }
+  const input = model.limit?.input
+  return { context, input, output }
+}
+
+function catalogModel(model: z.infer<typeof modelsDevModelSchema>): ModelsDevModel {
+  return {
+    attachment: model.attachment ?? false,
+    reasoning: model.reasoning ?? false,
+    temperature: model.temperature ?? false,
+    toolCall: model.tool_call ?? true,
+    modalities: {
+      input: model.modalities?.input ?? ['text'],
+      output: model.modalities?.output ?? [],
+    },
+    limit: catalogLimit(model),
+  }
 }
 
 const MODELS_DEV_PROVIDER_KEYS = [
@@ -242,10 +278,10 @@ function trimModelsDevPayload(payload: object) {
 const modelsDevProviderSchema = z
   .object({ models: z.record(z.string(), modelsDevModelSchema) })
   .transform(({ models }) => {
-    const catalog = new Map<string, ModelsDevLimit | null>()
+    const catalog = new Map<string, ModelsDevModel>()
     for (const [modelId, model] of Object.entries(models)) {
       if (!model.modalities?.output?.includes('text')) continue
-      catalog.set(modelId, catalogLimit(model))
+      catalog.set(modelId, catalogModel(model))
     }
     return catalog
   })
@@ -286,7 +322,7 @@ export function parseModelsDevCatalog(payload: object): ModelsDevError | ModelsD
   return catalog.data
 }
 
-export function modelsDevLimit({
+export function modelsDevModel({
   provider,
   modelId,
   catalog,
@@ -297,6 +333,32 @@ export function modelsDevLimit({
 }) {
   if (catalog instanceof Error) return null
   return catalog[provider].get(modelId) ?? null
+}
+
+export function modelsDevInputModalities(args: {
+  provider: ProviderId
+  modelId: string
+  catalog: ModelsDevCatalog | Error
+}) {
+  const model = modelsDevModel(args)
+  if (!model) return null
+  const allowed =
+    args.provider === 'xai'
+      ? new Set(['text', 'image'])
+      : args.provider === 'kimi' || args.provider === 'minimax'
+        ? new Set(['text', 'image', 'pdf'])
+        : null
+  return allowed
+    ? model.modalities.input.filter((modality) => allowed.has(modality))
+    : model.modalities.input
+}
+
+export function modelsDevLimit(args: {
+  provider: ProviderId
+  modelId: string
+  catalog: ModelsDevCatalog | Error
+}) {
+  return modelsDevModel(args)?.limit ?? null
 }
 
 export async function loadModelsDevCatalog(args: { log?: SubrouterLog } = {}) {
