@@ -242,7 +242,7 @@ describe('RouterModel failover', () => {
     })
   })
 
-  test('createSubrouter passes log into each language model', async () => {
+  test('createSubrouter passes log into models without leaking between instances', async () => {
     const anthropicMock = await startMockServer(() => anthropic429)
     const opencodeMock = await startMockServer(() => chatCompletionOk('hello from fallback'))
     servers = [anthropicMock, opencodeMock]
@@ -257,9 +257,15 @@ describe('RouterModel failover', () => {
     await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
 
     const logs: SubrouterLogEntry[] = []
+    const otherLogs: SubrouterLogEntry[] = []
     const sdk = createSubrouter({
       log: (entry) => {
         logs.push(entry)
+      },
+    })
+    createSubrouter({
+      log: (entry) => {
+        otherLogs.push(entry)
       },
     })
     await sdk.languageModel('test').doGenerate(callOptions)
@@ -268,6 +274,7 @@ describe('RouterModel failover', () => {
       'warn failover anthropic/claude-fake #1 (a@x.com)',
       'info trying opencode-go/fake-model #1 (API key)',
     ])
+    expect(otherLogs).toEqual([])
   })
 
   test('persists a short retry-after as the account cooldown', async () => {

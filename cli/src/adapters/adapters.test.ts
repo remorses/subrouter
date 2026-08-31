@@ -131,7 +131,7 @@ describe('classifyFailure', () => {
 
 describe('emitLog', () => {
   test('does nothing when no sink is passed', () => {
-    emitLog(undefined, { level: 'info', message: 'trying' })
+    expect(() => emitLog(undefined, { level: 'info', message: 'trying' })).not.toThrow()
   })
 
   test('swallows synchronous and asynchronous sink errors', async () => {

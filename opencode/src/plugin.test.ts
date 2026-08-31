@@ -130,7 +130,7 @@ function authMethod() {
 
 test('plugin load and config do not write stdout or stderr', async () => {
   const script = "import('./src/index.ts').then(async ({ subrouterPlugin }) => { const hooks = await subrouterPlugin({}); await hooks.config?.({}) })"
-  const result = await execFile(path.resolve('../node_modules/.bin/tsx'), ['--eval', script], {
+  const result = await execFile(process.execPath, ['--no-warnings', '--import', 'tsx', '--eval', script], {
     cwd: process.cwd(),
     env: process.env,
   })
