@@ -18,7 +18,7 @@
  * OpenCode calls every export as a plugin.
  */
 
-import type { Plugin } from '@opencode-ai/plugin'
+import type { Plugin, PluginInput } from '@opencode-ai/plugin'
 import {
   adapters,
   addAccount,
@@ -31,8 +31,8 @@ import {
   PROVIDER_ID,
   PROVIDER_IDS,
   resolveActiveCandidate,
-  setSubrouterLog,
   type StoredAccount,
+  type SubrouterLog,
 } from '@subrouter/cli'
 import { addSubrouterHeaders, revealRoutedModel } from './provider.ts'
 
@@ -41,31 +41,30 @@ function providerEntryUrl() {
   return new URL(isDev ? './provider.ts' : './provider.js', import.meta.url).href
 }
 
-export const subrouterPlugin: Plugin = async ({ client }) => {
-  // OpenCode loads this plugin and the provider module separately. Both import
-  // @subrouter/cli; this callback is the only log sink the router may use.
-  // Never console.log here. OpenCode prints plugin logs via client.app.log.
-  if (client?.app?.log) {
-    setSubrouterLog((entry) => {
-      void client.app
-        .log({
-          body: {
-            service: 'subrouter',
-            level: entry.level,
-            message: entry.message,
-            extra: entry.extra,
-          },
-        })
-        .catch(() => {})
-    })
+function opencodeLog(client: PluginInput['client'] | undefined): SubrouterLog | undefined {
+  if (!client?.app?.log) return undefined
+  const write = client.app.log.bind(client.app)
+  return (entry) => {
+    void write({
+      body: {
+        service: 'subrouter',
+        level: entry.level,
+        message: entry.message,
+        extra: entry.extra,
+      },
+    }).catch(() => {})
   }
+}
+
+export const subrouterPlugin: Plugin = async ({ client }) => {
+  const log = opencodeLog(client)
   return {
     config: async (config) => {
       const presets = await loadPresets().catch(() => {
         return { version: 1 as const, presets: {} }
       })
       const names = new Set([DEFAULT_PRESET_NAME, ...Object.keys(presets.presets)])
-      const catalog = await loadModelsDevCatalog()
+      const catalog = await loadModelsDevCatalog({ log })
       const models = Object.fromEntries(
         await Promise.all(
           [...names].map(async (name) => {
@@ -103,7 +102,7 @@ export const subrouterPlugin: Plugin = async ({ client }) => {
           name: PROVIDER_DISPLAY_NAME,
           npm: providerEntryUrl(),
           models,
-          options: {},
+          options: log ? { log } : {},
         },
       }
     },

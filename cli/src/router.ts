@@ -9,8 +9,9 @@
  * (globally, in ~/.subrouter/config.json) and the next candidate is tried.
  * Cooling-down-only failures throw a retryable 429 so OpenCode waits
  * instead of dying. It only throws a hard error when nothing can be retried.
- * Cycle logs go through setSubrouterLog, never stdout. OpenCode wires that
- * to client.app.log. Pi has no log API, so those runs stay silent.
+ * Cycle logs go through the log callback passed at construction, never
+ * stdout. OpenCode wires that to client.app.log. Pi has no log API, so
+ * those runs stay silent.
  *
  * doStream must return as soon as the HTTP stream exists. Waiting for the
  * first content token (old inspectStream) made Grok look hung for the whole
@@ -28,9 +29,8 @@ import * as errore from 'errore'
 import {
   adapters,
   classifyFailure,
+  emitLog,
   failureDetailsFromError,
-  logSubrouter,
-  setSubrouterLog,
   type SubrouterLog,
 } from './adapters/index.ts'
 import {
@@ -203,7 +203,7 @@ function formatCandidateLog(candidate: Candidate) {
   return `${formatCandidateRef(candidate)} ${accountLabel(candidate.account, candidate.accountIndex)}`
 }
 
-export function logRouterEvent(event: RouterEvent) {
+export function logRouterEvent(event: RouterEvent, log?: SubrouterLog) {
   const extra = {
     provider: event.candidate.provider,
     modelId: event.candidate.modelId,
@@ -211,14 +211,14 @@ export function logRouterEvent(event: RouterEvent) {
     accountIndex: event.candidate.accountIndex,
   }
   if (event.type === 'trying') {
-    logSubrouter({
+    emitLog(log, {
       level: 'info',
       message: `trying ${formatCandidateLog(event.candidate)}`,
       extra,
     })
     return
   }
-  logSubrouter({
+  emitLog(log, {
     level: 'warn',
     message: `failover ${formatCandidateLog(event.candidate)}`,
     extra: {
@@ -242,6 +242,7 @@ export type RouterModelArgs = {
   /** preset name, exposed as the modelId */
   preset: string
   onEvent?: (event: RouterEvent) => void
+  log?: SubrouterLog
 }
 
 export class RouterModel implements LanguageModelV3 {
@@ -250,10 +251,12 @@ export class RouterModel implements LanguageModelV3 {
   readonly modelId: string
   readonly supportedUrls: Record<string, RegExp[]> = {}
   private onEvent?: (event: RouterEvent) => void
+  private log?: SubrouterLog
 
   constructor(args: RouterModelArgs) {
     this.modelId = args.preset
     this.onEvent = args.onEvent
+    this.log = args.log
   }
 
   private buildModel(candidate: Candidate) {
@@ -283,7 +286,7 @@ export class RouterModel implements LanguageModelV3 {
 
     const { candidates, skipped, retryAfterMs } = await resolveCandidates({ presetModels })
     for (const reason of skipped) {
-      logSubrouter({ level: 'info', message: `skip ${reason}` })
+      emitLog(this.log, { level: 'info', message: `skip ${reason}` })
     }
     if (candidates.length === 0) {
       const reason = skipped.length > 0 ? skipped.join('; ') : 'no providers configured'
@@ -299,7 +302,7 @@ export class RouterModel implements LanguageModelV3 {
     for (const candidate of candidates) {
       const trying = { type: 'trying' as const, candidate }
       this.onEvent?.(trying)
-      logRouterEvent(trying)
+      logRouterEvent(trying, this.log)
       const model = this.buildModel(candidate)
       const result = await Promise.resolve()
         .then(() => run(model, candidate))
@@ -338,7 +341,7 @@ export class RouterModel implements LanguageModelV3 {
           : Math.min(soonestRetryAfterMs, action.cooldownMs)
       const failover = { type: 'failover' as const, candidate, error, cooldownMs: action.cooldownMs }
       this.onEvent?.(failover)
-      logRouterEvent(failover)
+      logRouterEvent(failover, this.log)
       attempts.push(
         `${candidate.provider}/${candidate.modelId} ${accountLabel(candidate.account, candidate.accountIndex)}: ${error.message}`,
       )
@@ -504,15 +507,12 @@ function candidateCallOptions({
 export function createSubrouter(
   options: { onEvent?: (event: RouterEvent) => void; log?: SubrouterLog } = {},
 ) {
-  // Process-wide on purpose. OpenCode loads this factory from a second
-  // @subrouter/cli import; setSubrouterLog is the shared sink.
-  if (options.log) setSubrouterLog(options.log)
   return {
     languageModel(presetName: string) {
-      return new RouterModel({ preset: presetName, onEvent: options.onEvent })
+      return new RouterModel({ preset: presetName, onEvent: options.onEvent, log: options.log })
     },
     chat(presetName: string) {
-      return new RouterModel({ preset: presetName, onEvent: options.onEvent })
+      return new RouterModel({ preset: presetName, onEvent: options.onEvent, log: options.log })
     },
   }
 }

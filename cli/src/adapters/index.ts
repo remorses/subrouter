@@ -53,22 +53,13 @@ export type SubrouterLogEntry = {
 
 export type SubrouterLog = (entry: SubrouterLogEntry) => void | Promise<void>
 
-// OpenCode loads the plugin and the provider as two imports of @subrouter/cli.
-// A module-local variable would not be shared. Symbol.for is the process-wide
-// key both copies can see, without putting a string on globalThis.
-const LOG_KEY = Symbol.for('@subrouter/cli/log')
-
-export function setSubrouterLog(log: SubrouterLog | undefined) {
-  if (log) Reflect.set(globalThis, LOG_KEY, log)
-  else Reflect.deleteProperty(globalThis, LOG_KEY)
-}
-
-export function logSubrouter(entry: SubrouterLogEntry) {
-  const value = Reflect.get(globalThis, LOG_KEY)
-  if (typeof value !== 'function') return
-  void Promise.resolve(value(entry)).catch(() => {
-    // Logging must never break routing. Harnesses own the sink.
-  })
+export function emitLog(log: SubrouterLog | undefined, entry: SubrouterLogEntry) {
+  if (!log) return
+  void Promise.resolve()
+    .then(() => log(entry))
+    .catch(() => {
+      // Logging must never break routing. Harnesses own the sink.
+    })
 }
 
 export type LoginArgs = {
@@ -308,7 +299,7 @@ export function modelsDevLimit({
   return catalog[provider].get(modelId) ?? null
 }
 
-export async function loadModelsDevCatalog() {
+export async function loadModelsDevCatalog(args: { log?: SubrouterLog } = {}) {
   const url = modelsDevUrl()
   const cached = await readJson<{ fetchedAt: number; url: string; payload: object } | null>(
     catalogCachePath(),
@@ -332,7 +323,7 @@ export async function loadModelsDevCatalog() {
     payload: trimmed,
   }).catch((cause) => new ModelsDevError({ reason: 'cache write failed', cause }))
   if (cachedWrite instanceof Error) {
-    logSubrouter({ level: 'warn', message: cachedWrite.message })
+    emitLog(args.log, { level: 'warn', message: cachedWrite.message })
   }
   return parseModelsDevCatalog(trimmed)
 }

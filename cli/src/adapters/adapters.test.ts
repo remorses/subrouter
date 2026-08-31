@@ -5,12 +5,11 @@ import path from 'node:path'
 import { afterEach, describe, expect, test } from 'vitest'
 import {
   classifyFailure,
+  emitLog,
   isPermanentRefreshFailure,
   loadModelsDevCatalog,
-  logSubrouter,
   modelsDevLimit,
   parseModelsDevCatalog,
-  setSubrouterLog,
   validateModelsDevModelIds,
 } from './index.ts'
 import { rewriteRequestPayload } from './anthropic.ts'
@@ -130,25 +129,29 @@ describe('classifyFailure', () => {
   })
 })
 
-describe('logSubrouter', () => {
-  afterEach(() => {
-    setSubrouterLog(undefined)
+describe('emitLog', () => {
+  test('does nothing when no sink is passed', () => {
+    emitLog(undefined, { level: 'info', message: 'trying' })
   })
 
-  test('swallows a rejecting async sink without an unhandled rejection', async () => {
+  test('swallows synchronous and asynchronous sink errors', async () => {
     const unhandled: Error[] = []
-    function onUnhandled(reason: Error) {
-      unhandled.push(reason)
-    }
+    const onUnhandled = unhandled.push.bind(unhandled)
+    let calls = 0
     process.on('unhandledRejection', onUnhandled)
-    setSubrouterLog(async () => {
-      throw new Error('log transport failed')
-    })
-    logSubrouter({ level: 'info', message: 'trying' })
+    emitLog(() => {
+      calls += 1
+      throw new Error('synchronous log transport failure')
+    }, { level: 'info', message: 'trying' })
+    emitLog(async () => {
+      calls += 1
+      throw new Error('asynchronous log transport failure')
+    }, { level: 'info', message: 'trying' })
     await new Promise((resolve) => {
       setTimeout(resolve, 20)
     })
     process.off('unhandledRejection', onUnhandled)
+    expect(calls).toBe(2)
     expect(unhandled).toEqual([])
   })
 })

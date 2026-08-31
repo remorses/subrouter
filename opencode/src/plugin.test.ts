@@ -1,9 +1,12 @@
+import childProcess from 'node:child_process'
 import { createServer, type Server } from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import util from 'node:util'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
+import { createOpencodeClient } from '@opencode-ai/sdk'
 import {
   addAccount,
   adapters,
@@ -11,11 +14,11 @@ import {
   PROVIDER_DISPLAY_NAME,
   PROVIDER_IDS,
   savePreset,
-  setSubrouterLog,
 } from '@subrouter/cli'
 import { subrouterAuthPlugin, subrouterPlugin } from './index.ts'
 import { revealRoutedModel, rewritePoweredByModelLine } from './provider.ts'
 
+const execFile = util.promisify(childProcess.execFile)
 let home: string
 const openServers: Server[] = []
 const pluginInput = {} as PluginInput
@@ -27,7 +30,6 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  setSubrouterLog(undefined)
   delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_OPENAI_ISSUER_URL
   delete process.env.SUBROUTER_MODELS_DEV_URL
@@ -125,6 +127,54 @@ function authMethod() {
     return { provider: hooks.auth!.provider, method }
   })
 }
+
+test('plugin load and config do not write stdout or stderr', async () => {
+  const script = "import('./src/index.ts').then(async ({ subrouterPlugin }) => { const hooks = await subrouterPlugin({}); await hooks.config?.({}) })"
+  const result = await execFile(path.resolve('../node_modules/.bin/tsx'), ['--eval', script], {
+    cwd: process.cwd(),
+    env: process.env,
+  })
+  expect(result).toEqual({ stdout: '', stderr: '' })
+})
+
+test('provider log callback forwards only to client.app.log', async () => {
+  const received = Promise.withResolvers<object>()
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => {
+      chunks.push(chunk)
+    })
+    req.on('end', () => {
+      received.resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')) as object)
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end('{}')
+    })
+  })
+  await new Promise<void>((resolve) => {
+    server.listen(0, '127.0.0.1', resolve)
+  })
+  openServers.push(server)
+  const address = server.address()
+  if (typeof address === 'string' || !address) throw new Error('failed to bind log server')
+  const client = createOpencodeClient({ baseUrl: `http://127.0.0.1:${address.port}` })
+  const hooks = await subrouterPlugin({ ...pluginInput, client })
+  const config: Config = {}
+  await hooks.config?.(config)
+  const log = config.provider?.subrouter?.options?.log
+  expect(log).toBeTypeOf('function')
+  if (typeof log !== 'function') throw new Error('expected provider log callback')
+  await log({
+    level: 'warn',
+    message: 'failover openai/gpt-5.5',
+    extra: { provider: 'openai', modelId: 'gpt-5.5' },
+  })
+  expect(await received.promise).toEqual({
+    service: 'subrouter',
+    level: 'warn',
+    message: 'failover openai/gpt-5.5',
+    extra: { provider: 'openai', modelId: 'gpt-5.5' },
+  })
+})
 
 test('config hook registers the subrouter provider with preset models', async () => {
   await savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })

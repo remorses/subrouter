@@ -13,12 +13,13 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { APICallError, type LanguageModelV3CallOptions } from '@ai-sdk/provider'
 import {
   AllCandidatesExhaustedError,
+  createSubrouter,
   NoUsableAccountError,
   resolveActiveCandidate,
   resolveCandidates,
   RouterModel,
 } from './router.ts'
-import { setSubrouterLog, type SubrouterLogEntry } from './adapters/index.ts'
+import { type SubrouterLogEntry } from './adapters/index.ts'
 import { addAccount, loadState, markCooldown, savePreset, type StoredAccount } from './store.ts'
 
 type MockResponse = { status: number; headers?: Record<string, string>; body: string }
@@ -150,7 +151,6 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  setSubrouterLog(undefined)
   delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_ANTHROPIC_BASE_URL
   delete process.env.SUBROUTER_OPENCODE_GO_BASE_URL
@@ -221,10 +221,12 @@ describe('RouterModel failover', () => {
     await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
 
     const logs: SubrouterLogEntry[] = []
-    setSubrouterLog((entry) => {
-      logs.push(entry)
+    const model = new RouterModel({
+      preset: 'test',
+      log: (entry) => {
+        logs.push(entry)
+      },
     })
-    const model = new RouterModel({ preset: 'test' })
     await model.doGenerate(callOptions)
     expect(logs.map((entry) => `${entry.level} ${entry.message}`)).toMatchInlineSnapshot(`
       [
@@ -238,6 +240,34 @@ describe('RouterModel failover', () => {
       modelId: 'claude-fake',
       account: 'a@x.com',
     })
+  })
+
+  test('createSubrouter passes log into each language model', async () => {
+    const anthropicMock = await startMockServer(() => anthropic429)
+    const opencodeMock = await startMockServer(() => chatCompletionOk('hello from fallback'))
+    servers = [anthropicMock, opencodeMock]
+    process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com', refresh: 'r1', access: 'acc1' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    const logs: SubrouterLogEntry[] = []
+    const sdk = createSubrouter({
+      log: (entry) => {
+        logs.push(entry)
+      },
+    })
+    await sdk.languageModel('test').doGenerate(callOptions)
+    expect(logs.map((entry) => `${entry.level} ${entry.message}`)).toEqual([
+      'info trying anthropic/claude-fake #1 (a@x.com)',
+      'warn failover anthropic/claude-fake #1 (a@x.com)',
+      'info trying opencode-go/fake-model #1 (API key)',
+    ])
   })
 
   test('persists a short retry-after as the account cooldown', async () => {

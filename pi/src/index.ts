@@ -26,9 +26,9 @@ import {
   AllCandidatesExhaustedError,
   classifyFailure,
   DEFAULT_PRESET_NAME,
+  emitLog,
   formatCandidateRef,
   logRouterEvent,
-  logSubrouter,
   isProviderId,
   loadAccounts,
   loadPresets,
@@ -42,6 +42,7 @@ import {
   updateAccount,
   type Candidate,
   type ProviderId,
+  type SubrouterLog,
 } from '@subrouter/cli'
 
 const PI_PROVIDER_IDS: Record<ProviderId, string> = {
@@ -240,12 +241,12 @@ const PI_AFTER_DOCS = /\n\n|\nCurrent working directory:/
 // Pi documentation block counts as a third-party app. Keep tools, cwd, skills,
 // and --append-system-prompt. Docs have no blank line inside; later blocks
 // start after one, except the cwd footer. Same idea as Archon's Pi provider.
-function sanitizePiAnthropicSystemPrompt(text: string) {
+function sanitizePiAnthropicSystemPrompt({ text, log }: { text: string; log?: SubrouterLog }) {
   const withoutIdentity = text.replace(PI_HARNESS_IDENTITY, '')
   const docsStart = withoutIdentity.indexOf(PI_DOCS_MARKER)
   if (docsStart === -1) {
     if (withoutIdentity.includes('operating inside pi') || withoutIdentity.includes('Pi documentation')) {
-      logSubrouter({
+      emitLog(log, {
         level: 'warn',
         message: 'pi system prompt markers missing; anthropic oauth may reject',
       })
@@ -271,11 +272,13 @@ function streamPreset({
   context,
   options,
   providers,
+  log,
 }: {
   model: Model<Api>
   context: Context
   options?: StreamOptions
   providers: Map<string, Provider>
+  log?: SubrouterLog
 }) {
   const stream = createAssistantMessageEventStream()
 
@@ -301,14 +304,14 @@ function streamPreset({
 
     const attempts: string[] = []
     for (const reason of skipped) {
-      logSubrouter({ level: 'info', message: `skip ${reason}` })
+      emitLog(log, { level: 'info', message: `skip ${reason}` })
     }
     candidateLoop: for (const candidate of candidates) {
       if (options?.signal?.aborted) {
         endWithError({ stream, model, error: new Error('Request was aborted'), aborted: true })
         return
       }
-      logRouterEvent({ type: 'trying', candidate })
+      logRouterEvent({ type: 'trying', candidate }, log)
 
       const target = targetModel({ candidate, providers })
       if (!target) {
@@ -331,7 +334,7 @@ function streamPreset({
           return
         }
         await recordCooldown({ candidate, cooldownMs: action.cooldownMs })
-        logRouterEvent({ type: 'failover', candidate, error: apiKey, cooldownMs: action.cooldownMs })
+        logRouterEvent({ type: 'failover', candidate, error: apiKey, cooldownMs: action.cooldownMs }, log)
         attempts.push(`${candidate.provider}/${candidate.modelId}: ${apiKey.message}`)
         continue
       }
@@ -342,7 +345,7 @@ function streamPreset({
       const anthropicOAuth = candidate.provider === 'anthropic' && apiKey.includes('sk-ant-oat')
       const routedContext =
         anthropicOAuth && context.systemPrompt
-          ? { ...context, systemPrompt: sanitizePiAnthropicSystemPrompt(context.systemPrompt) }
+          ? { ...context, systemPrompt: sanitizePiAnthropicSystemPrompt({ text: context.systemPrompt, log }) }
           : context
       const inner = target.provider.streamSimple(target.model, routedContext, {
         ...options,
@@ -375,7 +378,7 @@ function streamPreset({
           if (action) await recordCooldown({ candidate, cooldownMs: action.cooldownMs })
           if (action && !committed) {
             const error = new Error(event.error.errorMessage ?? 'Provider request failed')
-            logRouterEvent({ type: 'failover', candidate, error, cooldownMs: action.cooldownMs })
+            logRouterEvent({ type: 'failover', candidate, error, cooldownMs: action.cooldownMs }, log)
             attempts.push(
               `${candidate.provider}/${candidate.modelId} ${accountLabel(candidate.account, candidate.accountIndex)}: ${event.error.errorMessage ?? 'Provider request failed'}`,
             )
@@ -414,7 +417,7 @@ function streamPreset({
   return stream
 }
 
-async function createSubrouterProvider() {
+async function createSubrouterProvider(args: { log?: SubrouterLog } = {}) {
   const presets = await loadPresets()
   const names = new Set([DEFAULT_PRESET_NAME, ...Object.keys(presets.presets)])
   const resolved = await Promise.all(
@@ -488,8 +491,8 @@ async function createSubrouterProvider() {
       },
     },
     getModels: () => models,
-    stream: (model, context, options) => streamPreset({ model, context, options, providers }),
-    streamSimple: (model, context, options) => streamPreset({ model, context, options, providers }),
+    stream: (model, context, options) => streamPreset({ model, context, options, providers, log: args.log }),
+    streamSimple: (model, context, options) => streamPreset({ model, context, options, providers, log: args.log }),
   } satisfies Provider
 }
 

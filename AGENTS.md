@@ -151,6 +151,7 @@ When you need to see how OpenCode plugins, logging, retries, or provider loading
 - GitHub: https://github.com/anomalyco/opencode
 - Local cache: `bunx opensrc path anomalyco/opencode`
 - Plugin logging: https://opencode.ai/docs/plugins/#logging (`client.app.log`, never `console.log`)
+- Runtime logs use a callback passed through provider options into `createSubrouter()` and `RouterModel`. Never use `globalThis`, `Symbol.for`, module-level sinks, stdout, or stderr for library logs.
 - Retry headers: https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/retry.ts
 - Provider factory load: `packages/opencode/src/provider/provider.ts` calls the first export starting with `create`
 

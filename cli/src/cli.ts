@@ -15,7 +15,6 @@ import {
   adapters,
   loadModelsDevCatalog,
   runLogin,
-  setSubrouterLog,
   validateModelsDevModelIds,
 } from './adapters/index.ts'
 import { builtinDefaultPreset, DEFAULT_PRESET_NAME, resolveCandidates, resolvePresetModels } from './router.ts'
@@ -44,14 +43,6 @@ const require = createRequire(import.meta.url)
 const packageJson = require('../package.json') as { version: string }
 
 export const cli = goke('subrouter')
-
-cli.use((_options, ctx) => {
-  setSubrouterLog((entry) => {
-    if (entry.level === 'error') ctx.console.error(entry.message)
-    else if (entry.level === 'warn') ctx.console.warn(entry.message)
-    else ctx.console.log(entry.message)
-  })
-})
 
 const CODE_LOGIN_PROVIDERS = new Set<ProviderId>(['opencode-go', 'minimax', 'kimi', 'zai', 'alibaba'])
 
@@ -617,7 +608,13 @@ cli
         ctx,
       })
     }
-    const catalog = await loadModelsDevCatalog()
+    const catalog = await loadModelsDevCatalog({
+      log: (entry) => {
+        if (entry.level === 'error') ctx.console.error(entry.message)
+        else if (entry.level === 'warn') ctx.console.warn(entry.message)
+        else ctx.console.log(entry.message)
+      },
+    })
     if (catalog instanceof Error) fail(ctx, catalog.message)
     const invalidModel = validateModelsDevModelIds({ entries: models, catalog })
     if (invalidModel instanceof Error) fail(ctx, invalidModel.message)
