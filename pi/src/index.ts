@@ -1,4 +1,6 @@
-/** Pi extension that routes subrouter presets through Pi's native providers. */
+/** Pi extension that routes subrouter presets through Pi's native providers.
+ * Anthropic OAuth also strips Pi's self-identifying system prompt.
+ * session_shutdown closes this copy's Codex sockets so `pi -p` can exit. */
 
 import {
   createAssistantMessageEventStream,
@@ -14,6 +16,7 @@ import {
   type ProviderResponse,
   type StreamOptions,
 } from '@earendil-works/pi-ai'
+import { closeOpenAICodexWebSocketSessions } from '@earendil-works/pi-ai/api/openai-codex-responses'
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
@@ -229,6 +232,32 @@ function presetModel({
   }
 }
 
+const PI_HARNESS_IDENTITY = ' operating inside pi, a coding agent harness'
+const PI_DOCS_MARKER = '\nPi documentation (read only when the user asks about pi itself'
+const PI_AFTER_DOCS = /\n\n|\nCurrent working directory:/
+
+// Anthropic OAuth 400s Pi's default prompt: "operating inside pi" plus the
+// Pi documentation block counts as a third-party app. Keep tools, cwd, skills,
+// and --append-system-prompt. Docs have no blank line inside; later blocks
+// start after one, except the cwd footer. Same idea as Archon's Pi provider.
+function sanitizePiAnthropicSystemPrompt(text: string) {
+  const withoutIdentity = text.replace(PI_HARNESS_IDENTITY, '')
+  const docsStart = withoutIdentity.indexOf(PI_DOCS_MARKER)
+  if (docsStart === -1) {
+    if (withoutIdentity.includes('operating inside pi') || withoutIdentity.includes('Pi documentation')) {
+      logSubrouter({
+        level: 'warn',
+        message: 'pi system prompt markers missing; anthropic oauth may reject',
+      })
+    }
+    return withoutIdentity
+  }
+  const head = withoutIdentity.slice(0, docsStart).trimEnd()
+  const afterDocs = withoutIdentity.slice(docsStart + 1)
+  const nextSection = afterDocs.search(PI_AFTER_DOCS)
+  return nextSection === -1 ? head : head + afterDocs.slice(nextSection)
+}
+
 async function recordCooldown({ candidate, cooldownMs }: { candidate: Candidate; cooldownMs: number }) {
   await markCooldown({
     provider: candidate.provider,
@@ -309,7 +338,13 @@ function streamPreset({
 
       let response: ProviderResponse | undefined
       const usesBearerHeader = candidate.provider === 'minimax' || candidate.provider === 'kimi'
-      const inner = target.provider.streamSimple(target.model, context, {
+      // pi-ai uses apiKey.includes("sk-ant-oat"), not startsWith.
+      const anthropicOAuth = candidate.provider === 'anthropic' && apiKey.includes('sk-ant-oat')
+      const routedContext =
+        anthropicOAuth && context.systemPrompt
+          ? { ...context, systemPrompt: sanitizePiAnthropicSystemPrompt(context.systemPrompt) }
+          : context
+      const inner = target.provider.streamSimple(target.model, routedContext, {
         ...options,
         apiKey: usesBearerHeader ? undefined : apiKey,
         headers: usesBearerHeader
@@ -460,4 +495,9 @@ async function createSubrouterProvider() {
 
 export default async function subrouterPiExtension(pi: ExtensionAPI) {
   pi.registerProvider(await createSubrouterProvider())
+  // The CLI bundle has its own pi-ai copy. This plugin's Codex sockets live
+  // here, so CLI session.dispose() cannot close them. Close on shutdown.
+  pi.on('session_shutdown', () => {
+    closeOpenAICodexWebSocketSessions()
+  })
 }

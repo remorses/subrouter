@@ -331,7 +331,7 @@ describe.sequential('@subrouter/pi', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  async function createPiSession(preset: string) {
+  async function createPiSession(preset: string, options?: { appendSystemPrompt?: string[] }) {
     const modelRuntime = await ModelRuntime.create({
       credentials: new InMemoryCredentialStore(),
       modelsPath: null,
@@ -354,6 +354,7 @@ describe.sequential('@subrouter/pi', () => {
         noPromptTemplates: true,
         noThemes: true,
         noContextFiles: true,
+        appendSystemPrompt: options?.appendSystemPrompt,
       },
     })
     expect(services.diagnostics).toEqual([])
@@ -419,6 +420,43 @@ describe.sequential('@subrouter/pi', () => {
     expect(openCodeServer.requests[0]?.authorization).toBe('Bearer fake-zen-key')
     expect(Object.keys((await loadState()).cooldowns)).toEqual(['anthropic:anthropic@example.com'])
     await expect(fs.access(path.join(agentDir, 'auth.json'))).rejects.toThrow()
+  }, 30_000)
+
+  test('strips Pi identity from Anthropic OAuth system prompts', async () => {
+    const anthropicModel = builtinProviders()
+      .find((entry) => entry.id === 'anthropic')
+      ?.getModels()[0]
+    if (!anthropicModel) throw new Error('Pi has no Anthropic model for the integration test')
+
+    await addAccount({
+      provider: 'anthropic',
+      account: {
+        type: 'oauth',
+        refresh: 'fake-refresh',
+        access: 'sk-ant-oat-fake-access',
+        expires: Date.now() + 60 * 60 * 1000,
+        email: 'anthropic@example.com',
+        addedAt: 1,
+        lastUsed: 1,
+      },
+    })
+    await savePreset({ name: 'anthropic-oauth', models: [`anthropic/${anthropicModel.id}`] })
+
+    const session = await createPiSession('anthropic-oauth', {
+      appendSystemPrompt: ['ALWAYS answer in French.'],
+    })
+    await session.prompt('Say hello')
+
+    expect(anthropicServer.requests).toHaveLength(1)
+    const body = JSON.parse(anthropicServer.requests[0]!.body) as {
+      system?: Array<{ text?: string }> | string
+    }
+    const systemText =
+      typeof body.system === 'string' ? body.system : (body.system ?? []).map((part) => part.text ?? '').join('\n')
+    expect(systemText).toContain("You are Claude Code, Anthropic's official CLI for Claude.")
+    expect(systemText).toContain('ALWAYS answer in French.')
+    expect(systemText).not.toContain('operating inside pi')
+    expect(systemText).not.toContain('Pi documentation')
   }, 30_000)
 
   test('cycles accounts and skips the cooled account on the next prompt', async () => {
@@ -499,6 +537,17 @@ describe.sequential('@subrouter/pi', () => {
     ])
     expect(codexWebSocketServer.httpRequests).toEqual([])
     expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:account-a'])
+    const openBeforeDispose = [...codexWebSocketServer.webSocketServer.clients].filter(
+      (socket) => socket.readyState === socket.OPEN,
+    )
+    expect(openBeforeDispose.length).toBeGreaterThan(0)
+    await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' })
+    session.dispose()
+    sessionToDispose = undefined
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect([...codexWebSocketServer.webSocketServer.clients].filter((socket) => socket.readyState === socket.OPEN)).toEqual(
+      [],
+    )
   }, 30_000)
 
   test('does not rotate a normal Codex websocket request error', async () => {

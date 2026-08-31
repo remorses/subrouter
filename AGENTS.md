@@ -282,6 +282,21 @@ Logs must show `agent=oracle mode=subagent` and `modelID=review`, then a follow-
 - `kimaki session export-events-jsonl`. That dump is only for **Discord-mapped** Kimaki sessions. `opencode run` sessions are not in that SQLite buffer. Use `--print-logs` and `kimaki session read <ses_...>`.
 - Published npm packages. Always the local workspace plugin + freshly built `cli/dist`.
 
+## Live Pi CLI checks
+
+Rebuild first. Use the **workspace** Pi binary, not a global `pi`. Global installs can be older than the plugin peer (`0.84.3`).
+
+```bash
+pnpm --filter @subrouter/cli build
+pnpm --filter @subrouter/pi build
+```
+
+Load `pi/dist/index.js` with `-e`. Isolate vs cycle uses the same presets as OpenCode (`openai-only`, `openai-first`).
+
+Anthropic Claude Pro/Max OAuth **400s** Pi's default system prompt (`operating inside pi`, `Pi documentation`). The plugin strips that identity before the native Anthropic stream. A live Anthropic fallback that still returns extra-usage is a **prompt leak**, not a quota rotate.
+
+`pi -p` used to hang after a Codex turn because `@subrouter/pi` opens sockets in a second `pi-ai` copy. The plugin now closes them on `session_shutdown`. For SDK scripts still call `session.dispose()`. Set Pi `transport` to `sse` only if you need to isolate a remaining hang.
+
 ## Conventions
 
 - errore error handling everywhere (`errore.createTaggedError`, errors as values, `instanceof Error` early returns).
