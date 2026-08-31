@@ -1,9 +1,10 @@
 /** Tests the OpenAI Codex WebSocket transport through the real AI SDK model. */
 
-import type {
-  JSONObject,
-  LanguageModelV3CallOptions,
-  LanguageModelV3StreamPart,
+import {
+  APICallError,
+  type JSONObject,
+  type LanguageModelV3CallOptions,
+  type LanguageModelV3StreamPart,
 } from '@ai-sdk/provider'
 import * as errore from 'errore'
 import http from 'node:http'
@@ -292,7 +293,61 @@ describe('OpenAI Codex WebSocket transport', () => {
     expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:account-b'])
   })
 
-  test('records cooldown without replaying after visible output', async () => {
+  test.each([
+    {
+      name: 'WebSocket connection loss',
+      fail: (socket: WebSocket) => socket.terminate(),
+      message: 'closed before response completed (code 1006',
+      statusCode: undefined,
+    },
+    {
+      name: 'Grok-style 403',
+      fail: (socket: WebSocket) =>
+        socket.send(
+          JSON.stringify({
+            type: 'error',
+            status_code: 403,
+            error: {
+              type: 'personal-team-blocked:spending-limit',
+              message: 'You have run out of credits or need a Grok subscription.',
+            },
+          }),
+        ),
+      message: 'run out of credits',
+      statusCode: 403,
+    },
+  ])('marks $name retryable before semantic output', async ({ fail, message, statusCode }) => {
+    const server = await startCodexServer(({ authorization, socket }) => {
+      if (authorization !== 'Bearer access-b') {
+        for (const event of completionEvents({ text: 'must not run', responseId: 'fallback-1' })) {
+          socket.send(JSON.stringify(event))
+        }
+        return
+      }
+      socket.send(JSON.stringify(completionEvents({ text: 'partial', responseId: 'partial-1' })[0]))
+      setTimeout(() => fail(socket), 20)
+    })
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    await addAccount({ provider: 'openai', account: oauthAccount({ accountId: 'account-a', access: 'access-a' }) })
+    await addAccount({ provider: 'openai', account: oauthAccount({ accountId: 'account-b', access: 'access-b' }) })
+    await savePreset({ name: 'test', models: ['openai/gpt-test'] })
+
+    const result = await new RouterModel({ preset: 'test' }).doStream(callOptions)
+    const error = await (async () => {
+      for await (const _part of result.stream) {
+      }
+    })().catch((cause) => cause as Error)
+    expect(APICallError.isInstance(error)).toBe(true)
+    if (!APICallError.isInstance(error)) throw error
+    expect(error.isRetryable).toBe(true)
+    expect(error.statusCode).toBe(statusCode)
+    expect(error.message).toContain(message)
+    expect(server.connections.map((item) => item.authorization)).toEqual(['Bearer access-b'])
+    expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:account-b'])
+  })
+
+  test('does not retry a Grok-style 403 after visible output', async () => {
     const server = await startCodexServer(({ authorization, socket }) => {
       if (authorization !== 'Bearer access-b') {
         for (const event of completionEvents({ text: 'must not run', responseId: 'fallback-1' })) {
@@ -307,9 +362,11 @@ describe('OpenAI Codex WebSocket transport', () => {
         socket.send(
           JSON.stringify({
             type: 'error',
-            status_code: 429,
-            headers: { 'retry-after': '600' },
-            error: { type: 'usage_limit_reached', message: 'The usage limit has been reached' },
+            status_code: 403,
+            error: {
+              type: 'personal-team-blocked:spending-limit',
+              message: 'You have run out of credits or need a Grok subscription.',
+            },
           }),
         )
       }, 20)
@@ -333,8 +390,11 @@ describe('OpenAI Codex WebSocket transport', () => {
         "text-delta",
       ]
     `)
-    expect(error).toBeInstanceOf(Error)
-    expect(error?.message).toContain('usage limit')
+    expect(APICallError.isInstance(error)).toBe(true)
+    if (!APICallError.isInstance(error)) throw error
+    expect(error.isRetryable).toBe(false)
+    expect(error.statusCode).toBe(403)
+    expect(error.message).toContain('run out of credits')
     expect(parts.flatMap((part) => (part.type === 'text-delta' ? [part.delta] : []))).toEqual(['partial'])
     expect(server.connections.map((item) => item.authorization)).toEqual(['Bearer access-b'])
     expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:account-b'])

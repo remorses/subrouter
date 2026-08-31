@@ -109,10 +109,29 @@ describe('classifyFailure', () => {
     expect(action!.cooldownMs).toBeGreaterThanOrEqual(6 * 60 * 60 * 1000)
   })
 
-  test('401/403 rotate, 400 does not', () => {
+  test('401/403 rotate, including Grok spending limits, while 400 does not', () => {
     expect(classifyFailure({ statusCode: 401, message: 'unauthorized' })?.rotate).toBe(true)
-    expect(classifyFailure({ statusCode: 403, message: 'forbidden' })?.rotate).toBe(true)
+    expect(
+      classifyFailure({
+        statusCode: 403,
+        message:
+          'personal-team-blocked:spending-limit: You have run out of credits or need a Grok subscription. (403)',
+      })?.rotate,
+    ).toBe(true)
     expect(classifyFailure({ statusCode: 400, body: 'bad request', message: 'bad request' })).toBeNull()
+  })
+
+  test('OpenAI WebSocket connection loss rotates', () => {
+    expect(
+      classifyFailure({
+        message: 'OpenAI WebSocket failed: closed before response completed (code 1006: Connection ended)',
+      })?.rotate,
+    ).toBe(true)
+    expect(
+      classifyFailure({
+        message: 'OpenAI WebSocket failed: closed before response completed (code 1008: Policy violation)',
+      }),
+    ).toBeNull()
   })
 
   test('usage-limit body text rotates even on 200-family errors', () => {

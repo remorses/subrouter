@@ -494,6 +494,7 @@ function rotateWorthyText(text: string) {
     haystack.includes('balance exhausted') ||
     haystack.includes('spending-limit') ||
     haystack.includes('run out of credits') ||
+    haystack.includes('openai websocket failed: closed before response completed (code 1006') ||
     haystack.includes('refresh token expired') ||
     haystack.includes('re-login required') ||
     haystack.includes('invalid api key') ||
