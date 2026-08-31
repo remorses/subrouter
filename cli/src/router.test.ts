@@ -72,10 +72,8 @@ async function startMockServer(respond: (request: { path: string }) => MockRespo
 }
 
 async function startChatSseServer({
-  onHeaders,
   writeBody,
 }: {
-  onHeaders?: () => void
   writeBody: (res: ServerResponse) => void
 }): Promise<MockServer> {
   const requests: MockServer['requests'] = []
@@ -91,7 +89,7 @@ async function startChatSseServer({
         body,
       })
       res.writeHead(200, { 'content-type': 'text/event-stream' })
-      onHeaders?.()
+      res.flushHeaders()
       writeBody(res)
     })
   })
@@ -397,20 +395,20 @@ describe('RouterModel failover', () => {
     expect(active).toMatchObject({ provider: 'opencode-go', modelId: 'fake-model' })
   })
 
-  test('doStream returns after HTTP headers, not after the first content token', async () => {
-    const contentGate = Promise.withResolvers<void>()
+  test('doStream returns after HTTP headers, not after the first SSE event', async () => {
+    const bodyGate = Promise.withResolvers<void>()
     const opencodeMock = await startChatSseServer({
       writeBody: (res) => {
-        res.write(
-          `data: ${JSON.stringify({
-            id: 'chatcmpl-1',
-            object: 'chat.completion.chunk',
-            created: 1,
-            model: 'fake-model',
-            choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
-          })}\n\n`,
-        )
-        void contentGate.promise.then(() => {
+        void bodyGate.promise.then(() => {
+          res.write(
+            `data: ${JSON.stringify({
+              id: 'chatcmpl-1',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'fake-model',
+              choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+            })}\n\n`,
+          )
           res.write(
             `data: ${JSON.stringify({
               id: 'chatcmpl-1',
@@ -443,7 +441,7 @@ describe('RouterModel failover', () => {
     await savePreset({ name: 'test', models: ['opencode-go/fake-model'] })
 
     const result = await new RouterModel({ preset: 'test' }).doStream(callOptions)
-    contentGate.resolve()
+    bodyGate.resolve()
 
     const parts: string[] = []
     for await (const part of result.stream) {

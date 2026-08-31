@@ -408,10 +408,8 @@ async function inspectStream({
       return { ok: false, error }
     }
     buffered.push(next.value)
-    // stream-start is local (TransformStream.start). Waiting past it for
-    // response-metadata or the first token holds TTFT for the whole thinking
-    // window on Grok. HTTP 429 still throws from doStream and failovers.
-    if (next.value.type === 'stream-start') continue
+    // stream-start is local (TransformStream.start). Do not read the next
+    // part. That wait is the first SSE event, often after Grok thinking.
     return {
       ok: true,
       value: { ...result, stream: continueStream({ reader, buffered, onCommittedError }) },
