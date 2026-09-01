@@ -221,6 +221,8 @@ npx @subrouter/cli status                   # everything at a glance
 npx @subrouter/cli cooldown clear [--force] # retry every account now
 ```
 
+**Clear cooldowns after you manually upgrade, renew, or reset a subscription plan.** Subrouter cannot detect that the provider restored your quota, so `cooldown clear` removes every provider and account cooldown and lets the next request retry them immediately. Use `--force` in a non-interactive shell.
+
 **Browser and device login runs in the background** when an agent or non-interactive shell starts it. Approve the URL, then poll for completion:
 
 ```bash
