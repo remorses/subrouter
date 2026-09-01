@@ -14,7 +14,7 @@ import http, { type Server } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
-import { addAccount, loadState, savePreset } from '@subrouter/cli'
+import { addAccount, clearCooldowns, loadState, savePreset } from '@subrouter/cli'
 import { WebSocketServer, type WebSocket } from 'ws'
 
 type LocalServer = {
@@ -224,6 +224,54 @@ function streamChatCompletion({
   response.end('data: [DONE]\n\n')
 }
 
+function streamChatToolCall({
+  response,
+  modelId,
+  path,
+}: {
+  response: http.ServerResponse
+  modelId: string
+  path: string
+}) {
+  response.writeHead(200, { 'content-type': 'text/event-stream' })
+  response.write(
+    `data: ${JSON.stringify({
+      id: 'chatcmpl-tool',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: modelId,
+      choices: [
+        {
+          index: 0,
+          delta: {
+            role: 'assistant',
+            tool_calls: [
+              {
+                index: 0,
+                id: 'call-read',
+                type: 'function',
+                function: { name: 'read', arguments: JSON.stringify({ path }) },
+              },
+            ],
+          },
+          finish_reason: null,
+        },
+      ],
+    })}\n\n`,
+  )
+  response.write(
+    `data: ${JSON.stringify({
+      id: 'chatcmpl-tool',
+      object: 'chat.completion.chunk',
+      created: 1,
+      model: modelId,
+      choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+      usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+    })}\n\n`,
+  )
+  response.end('data: [DONE]\n\n')
+}
+
 function streamChatErrorAfterText({
   response,
   modelId,
@@ -331,7 +379,10 @@ describe.sequential('@subrouter/pi', () => {
     await fs.rm(root, { recursive: true, force: true })
   })
 
-  async function createPiSession(preset: string, options?: { appendSystemPrompt?: string[] }) {
+  async function createPiSession(
+    preset: string,
+    options?: { appendSystemPrompt?: string[]; tools?: boolean },
+  ) {
     const modelRuntime = await ModelRuntime.create({
       credentials: new InMemoryCredentialStore(),
       modelsPath: null,
@@ -369,7 +420,7 @@ describe.sequential('@subrouter/pi', () => {
       sessionManager: SessionManager.inMemory(projectDir),
       model,
       thinkingLevel: 'off',
-      noTools: 'all',
+      noTools: options?.tools ? undefined : 'all',
     })
     sessionToDispose = created.session
     await created.session.bindExtensions({})
@@ -420,6 +471,57 @@ describe.sequential('@subrouter/pi', () => {
     expect(openCodeServer.requests[0]?.authorization).toBe('Bearer fake-zen-key')
     expect(Object.keys((await loadState()).cooldowns)).toEqual(['anthropic:anthropic@example.com'])
     await expect(fs.access(path.join(agentDir, 'auth.json'))).rejects.toThrow()
+  }, 30_000)
+
+  test('keeps the fallback candidate through tool follow-ups until the agent settles', async () => {
+    const model = openCodeTestModel()
+    anthropicRespond = (_request, response) => {
+      response.writeHead(429, { 'content-type': 'application/json', 'retry-after': '0' })
+      response.end(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'rate limited' } }))
+    }
+    let fallbackCalls = 0
+    const readable = path.join(projectDir, 'message.txt')
+    await fs.writeFile(readable, 'tool result')
+    openCodeRespond = (_request, response) => {
+      fallbackCalls++
+      if (fallbackCalls === 1) {
+        void clearCooldowns().then(() => {
+          streamChatToolCall({ response, modelId: model.id, path: readable })
+        })
+        return
+      }
+      streamChatCompletion({ response, modelId: model.id, text: 'done' })
+    }
+    await addAccount({
+      provider: 'anthropic',
+      account: {
+        type: 'oauth',
+        refresh: 'fake-refresh',
+        access: 'sk-ant-oat-fake-access',
+        expires: Date.now() + 60 * 60 * 1000,
+        email: 'anthropic@example.com',
+        addedAt: 1,
+        lastUsed: 1,
+      },
+    })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'fake-zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({
+      name: 'tool-affinity',
+      models: ['anthropic/claude-opus-4-6', `opencode-go/${model.id}`],
+    })
+
+    const session = await createPiSession('tool-affinity', { tools: true })
+    await session.prompt('Read the file')
+    expect(anthropicServer.requests).toHaveLength(1)
+
+    await clearCooldowns()
+    await session.prompt('Say done')
+
+    expect(anthropicServer.requests).toHaveLength(2)
+    expect(openCodeServer.requests).toHaveLength(3)
   }, 30_000)
 
   test('strips Pi identity from Anthropic OAuth system prompts', async () => {

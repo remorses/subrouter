@@ -11,7 +11,10 @@ import {
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
   PROVIDER_ID,
-  resolveActiveCandidate,
+  resolveCandidates,
+  resolvePresetModels,
+  ROUTE_AFFINITY_HEADER,
+  type RouteAffinity,
 } from '@subrouter/cli'
 
 export { createSubrouter } from '@subrouter/cli'
@@ -34,37 +37,53 @@ export function rewritePoweredByModelLine({
 export async function revealRoutedModel({
   providerID,
   preset,
+  affinity,
+  affinityKey,
   system,
 }: {
   providerID: string
   preset: string
+  affinity?: RouteAffinity
+  affinityKey?: string
   system: string[]
 }) {
   if (providerID !== PROVIDER_ID) return
-  const candidate = await resolveActiveCandidate(preset)
+  const presetModels = await resolvePresetModels(preset)
+  if (presetModels instanceof Error) return
+  const resolved = await resolveCandidates({ presetModels })
+  const candidates = affinity?.prioritize(affinityKey ?? null, resolved.candidates) ?? resolved.candidates
+  const candidate = candidates[0]
   if (!candidate) return
   rewritePoweredByModelLine({ system, candidate })
 }
 
-export function addSubrouterHeaders(
+export function addSubrouterHeaders({
+  input,
+  output,
+  affinityKey = input.message.id,
+}: {
   input: {
     sessionID: string
     agent: string
     model: { providerID: string }
     message: {
+      id: string
       agent: string
       model: { providerID: string; modelID: string; variant?: string }
     }
-  },
-  output: { headers: Record<string, string> },
-) {
-  if (input.model.providerID !== PROVIDER_ID) return
+  }
+  output: { headers: Record<string, string> }
+  affinityKey?: string
+}) {
+  if (input.model.providerID !== PROVIDER_ID) return null
   output.headers[OPENAI_WEBSOCKET_SESSION_HEADER] = input.sessionID
   if (input.agent === input.message.agent) {
+    output.headers[ROUTE_AFFINITY_HEADER] = affinityKey
     output.headers[OPENCODE_AGENT_HEADER] = input.message.agent
     if (input.message.model.variant) {
       output.headers[OPENCODE_VARIANT_HEADER] = input.message.model.variant
     }
   }
   if (input.agent === 'title') output.headers[OPENAI_WEBSOCKET_TITLE_HEADER] = 'true'
+  return output.headers[ROUTE_AFFINITY_HEADER] ?? null
 }

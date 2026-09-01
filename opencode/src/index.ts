@@ -8,7 +8,8 @@
  * `subrouter preset create`) in opencode. Provider id stays `subrouter`; the
  * visible name is `subrouter.org`. Context limits follow the first live
  * candidate. Input modalities cover every usable candidate so the
- * router can select a compatible subscription for each prompt.
+ * router can select a compatible subscription for each prompt. Tool
+ * follow-ups stay on the selected route until the session becomes idle.
  *
  * `subrouterAuthPlugin` registers the login flow, so `opencode auth login`
  * (and any harness driving opencode's auth hook, like kimaki's Discord
@@ -35,6 +36,7 @@ import {
   PROVIDER_IDS,
   resolveCandidates,
   resolvePresetModels,
+  RouteAffinity,
   type CooldownFallbackNotice,
   type StoredAccount,
   type SubrouterLog,
@@ -63,6 +65,8 @@ function opencodeLog(client: PluginInput['client'] | undefined): SubrouterLog | 
 
 export const subrouterPlugin: Plugin = async ({ client, directory }) => {
   const log = opencodeLog(client)
+  const affinity = new RouteAffinity()
+  const activeMessages = new Map<string, string>()
   const pendingNotices = new Map<
     string,
     { agent: string; variant?: string; preset: string; text: string }
@@ -143,12 +147,15 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
           name: PROVIDER_DISPLAY_NAME,
           npm: providerEntryUrl(),
           models,
-          options: { log, onCooldownFallback },
+          options: { affinity, log, onCooldownFallback },
         },
       }
     },
     event: async ({ event }) => {
       if (event.type !== 'session.idle') return
+      const messageID = activeMessages.get(event.properties.sessionID)
+      if (messageID) affinity.clear(messageID)
+      activeMessages.delete(event.properties.sessionID)
       const pending = pendingNotices.get(event.properties.sessionID)
       if (!pending) return
       pendingNotices.delete(event.properties.sessionID)
@@ -167,12 +174,18 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
         })
         .catch(() => {})
     },
-    'chat.headers': async (input, output) => addSubrouterHeaders(input, output),
-    // OpenCode identity uses the preset id; rewrite it to the live routed model.
+    'chat.headers': async (input, output) => {
+      const activeMessage = activeMessages.get(input.sessionID) ?? input.message.id
+      const affinityKey = addSubrouterHeaders({ input, output, affinityKey: activeMessage })
+      if (affinityKey) activeMessages.set(input.sessionID, affinityKey)
+    },
+    // This runs before chat.headers, so a turn's first call has no affinity key.
     'experimental.chat.system.transform': async (input, output) => {
       await revealRoutedModel({
         providerID: input.model.providerID,
         preset: input.model.id,
+        affinity,
+        affinityKey: input.sessionID ? activeMessages.get(input.sessionID) : undefined,
         system: output.system,
       })
     },

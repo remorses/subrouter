@@ -77,7 +77,7 @@ The CLI command reference below covers account management, custom presets, coold
 
 ## How it works
 
-A preset is an ordered list of `provider/model` candidates. Subrouter walks that list, skips anything in cooldown, and retries on the next account or the next provider.
+A preset is an ordered list of `provider/model` candidates. Subrouter walks that list, skips anything in cooldown, and retries on the next account or the next provider. After a candidate accepts a user message, tool follow-ups stay on that provider, model, and account until the agent settles. The next user message starts from the preset ranking again.
 
 ```diagram
                 opencode Go / Pi

@@ -19,6 +19,8 @@ import {
   requiredInputModalities,
   resolveActiveCandidate,
   resolveCandidates,
+  RouteAffinity,
+  ROUTE_AFFINITY_HEADER,
   RouterModel,
 } from './router.ts'
 import { parseModelsDevCatalog, type SubrouterLogEntry } from './adapters/index.ts'
@@ -391,6 +393,38 @@ describe('RouterModel failover', () => {
     expect(until).toBeTruthy()
     expect(until! - before).toBeGreaterThan(5_000)
     expect(until! - before).toBeLessThan(13_000)
+  })
+
+  test('keeps the successful candidate for the same turn after an earlier cooldown expires', async () => {
+    const anthropicMock = await startMockServer(() => ({
+      ...anthropic429,
+      headers: { 'retry-after': '0' },
+    }))
+    const opencodeMock = await startMockServer(() => chatCompletionOk('fallback'))
+    servers = [anthropicMock, opencodeMock]
+    process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    const affinity = new RouteAffinity()
+    const model = new RouterModel({ preset: 'test', affinity })
+    const sameTurn = {
+      ...callOptions,
+      headers: { [ROUTE_AFFINITY_HEADER]: 'turn-1' },
+    }
+    await model.doGenerate(sameTurn)
+    await model.doGenerate(sameTurn)
+    affinity.clear('turn-1')
+    await model.doGenerate(sameTurn)
+
+    expect(anthropicMock.requests).toHaveLength(2)
+    expect(opencodeMock.requests).toHaveLength(3)
   })
 
   test('skips cooled-down accounts on the next call', async () => {

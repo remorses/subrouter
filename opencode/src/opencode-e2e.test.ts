@@ -13,17 +13,19 @@
 import { createOpencodeClient, type Event } from '@opencode-ai/sdk'
 import { createOpencodeServer } from '@opencode-ai/sdk/server'
 import { createServer, type Server } from 'node:http'
-import { mkdtemp, rm, mkdir } from 'node:fs/promises'
+import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
 import {
   OPENCODE_AGENT_HEADER,
   OPENCODE_VARIANT_HEADER,
   OPENAI_WEBSOCKET_SESSION_HEADER,
+  ROUTE_AFFINITY_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
   addAccount,
+  clearCooldowns,
   markCooldown,
 } from '@subrouter/cli'
 import { addSubrouterHeaders } from './provider.ts'
@@ -71,8 +73,13 @@ type MockServer = {
   close: () => Promise<void>
 }
 
+type MockHandler = (
+  args: { path: string; body: string },
+  res: import('node:http').ServerResponse,
+) => void
+
 async function startMockServer(
-  handler: (args: { path: string; body: string }, res: import('node:http').ServerResponse) => void,
+  handler: MockHandler,
 ): Promise<MockServer> {
   const requests: MockServer['requests'] = []
   const server: Server = createServer((req, res) => {
@@ -114,6 +121,8 @@ let projectDir: string
 let anthropicMock: MockServer
 let modelsDevMock: MockServer
 let zenMock: MockServer
+let zenRespond: MockHandler
+let defaultZenRespond: MockHandler
 let server: { url: string; close: () => void }
 const savedEnv: Record<string, string | undefined> = {}
 
@@ -129,7 +138,7 @@ beforeAll(async () => {
   })
 
   // Fake opencode-go: streams a canned completion
-  zenMock = await startMockServer(({ body }, res) => {
+  defaultZenRespond = ({ body }, res) => {
     const streaming = body.includes('"stream":true')
     if (!streaming) {
       res.writeHead(200, { 'content-type': 'application/json' })
@@ -171,7 +180,9 @@ beforeAll(async () => {
     )
     res.write('data: [DONE]\n\n')
     res.end()
-  })
+  }
+  zenRespond = defaultZenRespond
+  zenMock = await startMockServer((request, response) => zenRespond(request, response))
 
   modelsDevMock = await startMockServer((_request, res) => {
     const emptyProvider = { models: {} }
@@ -266,6 +277,10 @@ beforeAll(async () => {
   })
 }, 120_000)
 
+afterEach(() => {
+  zenRespond = defaultZenRespond
+})
+
 afterAll(async () => {
   server?.close()
   await anthropicMock?.close()
@@ -281,37 +296,40 @@ afterAll(async () => {
 describe('opencode + subrouter provider', () => {
   test('adds session affinity headers for subrouter models', async () => {
     const output = { headers: {} }
-    addSubrouterHeaders(
-      {
+    addSubrouterHeaders({
+      input: {
         sessionID: 'session-1',
         agent: 'build',
         model: { providerID: 'subrouter' },
         message: {
+          id: 'message-1',
           agent: 'build',
           model: { providerID: 'subrouter', modelID: 'build', variant: 'high' },
         },
       },
       output,
-    )
+    })
     expect(output.headers).toEqual({
       [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-1',
+      [ROUTE_AFFINITY_HEADER]: 'message-1',
       [OPENCODE_AGENT_HEADER]: 'build',
       [OPENCODE_VARIANT_HEADER]: 'high',
     })
 
     const titleOutput = { headers: {} }
-    addSubrouterHeaders(
-      {
+    addSubrouterHeaders({
+      input: {
         sessionID: 'session-2',
         agent: 'title',
         model: { providerID: 'subrouter' },
         message: {
+          id: 'message-1',
           agent: 'build',
           model: { providerID: 'subrouter', modelID: 'build', variant: 'high' },
         },
       },
-      titleOutput,
-    )
+      output: titleOutput,
+    })
     expect(titleOutput.headers).toEqual({
       [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-2',
       [OPENAI_WEBSOCKET_TITLE_HEADER]: 'true',
@@ -519,5 +537,124 @@ describe('opencode + subrouter provider', () => {
         "busy",
       ]
     `)
+  }, 120_000)
+
+  test('keeps the fallback candidate through tool follow-ups until the session is idle', async () => {
+    await clearCooldowns()
+    await markCooldown({
+      provider: 'anthropic',
+      account: {
+        type: 'oauth',
+        refresh: 'fake-refresh',
+        access: 'fake-access',
+        email: 'a@x.com',
+        addedAt: 1,
+        lastUsed: 1,
+      },
+      untilMs: Date.now() + 60_000,
+    })
+    const readable = path.join(projectDir, 'message.txt')
+    await writeFile(readable, 'tool result')
+    const fallbackBodies: string[] = []
+    let fallbackCalls = 0
+    zenRespond = ({ body }, res) => {
+      fallbackBodies.push(body)
+      fallbackCalls++
+      res.writeHead(200, { 'content-type': 'text/event-stream' })
+      if (fallbackCalls === 1) {
+        void clearCooldowns().then(() => {
+          res.write(
+            sseChunk({
+              id: 'tool-1',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'fake-model',
+              choices: [
+                {
+                  index: 0,
+                  delta: {
+                    role: 'assistant',
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: 'call-read',
+                        type: 'function',
+                        function: { name: 'read', arguments: JSON.stringify({ filePath: readable }) },
+                      },
+                    ],
+                  },
+                  finish_reason: null,
+                },
+              ],
+            }),
+          )
+          res.write(
+            sseChunk({
+              id: 'tool-1',
+              object: 'chat.completion.chunk',
+              created: 1,
+              model: 'fake-model',
+              choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+              usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+            }),
+          )
+          res.end('data: [DONE]\n\n')
+        })
+        return
+      }
+      res.write(
+        sseChunk({
+          id: 'text-1',
+          object: 'chat.completion.chunk',
+          created: 1,
+          model: 'fake-model',
+          choices: [{ index: 0, delta: { role: 'assistant', content: 'done' }, finish_reason: null }],
+        }),
+      )
+      res.write(
+        sseChunk({
+          id: 'text-1',
+          object: 'chat.completion.chunk',
+          created: 1,
+          model: 'fake-model',
+          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+        }),
+      )
+      res.end('data: [DONE]\n\n')
+    }
+
+    const client = createOpencodeClient({ baseUrl: server.url })
+    const session = await client.session.create({
+      query: { directory: projectDir },
+      body: { title: 'subrouter tool affinity' },
+    })
+    const anthropicBefore = anthropicMock.requests.length
+    await client.session.prompt({
+      path: { id: session.data!.id },
+      query: { directory: projectDir },
+      body: {
+        model: { providerID: 'subrouter', modelID: 'default' },
+        parts: [{ type: 'text', text: 'read the file' }],
+      },
+    })
+    expect(anthropicMock.requests).toHaveLength(anthropicBefore)
+    expect(
+      fallbackBodies
+        .slice(0, 2)
+        .map((body) => body.includes('You are powered by the model named grok-4.6')),
+    ).toEqual([true, true])
+
+    await clearCooldowns()
+    await client.session.prompt({
+      path: { id: session.data!.id },
+      query: { directory: projectDir },
+      body: {
+        model: { providerID: 'subrouter', modelID: 'default' },
+        parts: [{ type: 'text', text: 'say done' }],
+      },
+    })
+    expect(anthropicMock.requests).toHaveLength(anthropicBefore + 1)
+    expect(fallbackCalls).toBe(3)
   }, 120_000)
 })

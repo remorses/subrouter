@@ -8,6 +8,7 @@
  * delegates to the first usable underlying model. When a call fails with a
  * rate-limit/usage error, the account is put in cooldown
  * (globally, in ~/.subrouter/config.json) and the next candidate is tried.
+ * A successful candidate stays first for later calls in the same agent run.
  * Cooling-down-only failures throw a retryable 429 so OpenCode waits
  * instead of dying. It only throws a hard error when nothing can be retried.
  * Cycle logs go through the log callback passed at construction, never
@@ -88,6 +89,7 @@ export const PROVIDER_ID = 'subrouter'
 export const PROVIDER_DISPLAY_NAME = 'subrouter.org'
 export const OPENCODE_AGENT_HEADER = 'x-subrouter-opencode-agent'
 export const OPENCODE_VARIANT_HEADER = 'x-subrouter-opencode-variant'
+export const ROUTE_AFFINITY_HEADER = 'x-subrouter-route-affinity'
 
 /** Builtin default preset: newest model of each provider, ranked. */
 export function builtinDefaultPreset() {
@@ -114,6 +116,41 @@ export type Candidate = {
   modelId: string
   account: StoredAccount
   accountIndex: number
+}
+
+export class RouteAffinity {
+  private candidates = new Map<
+    string,
+    Pick<Candidate, 'provider' | 'modelId'> & { account: string }
+  >()
+
+  prioritize(key: string | null, candidates: Candidate[]) {
+    if (!key) return candidates
+    const affinity = this.candidates.get(key)
+    if (!affinity) return candidates
+    const index = candidates.findIndex(
+      (candidate) =>
+        candidate.provider === affinity.provider &&
+        candidate.modelId === affinity.modelId &&
+        cooldownKey(candidate) === affinity.account,
+    )
+    if (index <= 0) return candidates
+    return [candidates[index]!, ...candidates.slice(0, index), ...candidates.slice(index + 1)]
+  }
+
+  select(key: string | null, candidate: Candidate) {
+    if (!key) return
+    this.candidates.set(key, {
+      provider: candidate.provider,
+      modelId: candidate.modelId,
+      account: cooldownKey(candidate),
+    })
+  }
+
+  clear(key: string) {
+    if (!this.candidates.has(key)) return
+    this.candidates.delete(key)
+  }
 }
 
 export type CooldownFallbackNotice = {
@@ -325,6 +362,7 @@ type Attempt<T> = { ok: true; value: T } | { ok: false; error: Error }
 export type RouterModelArgs = {
   /** preset name, exposed as the modelId */
   preset: string
+  affinity?: RouteAffinity
   onEvent?: (event: RouterEvent) => void
   onCooldownFallback?: (notice: CooldownFallbackNotice) => void | Promise<void>
   log?: SubrouterLog
@@ -335,12 +373,14 @@ export class RouterModel implements LanguageModelV3 {
   readonly provider = PROVIDER_ID
   readonly modelId: string
   readonly supportedUrls: Record<string, RegExp[]> = {}
+  private affinity?: RouteAffinity
   private onEvent?: (event: RouterEvent) => void
   private onCooldownFallback?: (notice: CooldownFallbackNotice) => void | Promise<void>
   private log?: SubrouterLog
 
   constructor(args: RouterModelArgs) {
     this.modelId = args.preset
+    this.affinity = args.affinity
     this.onEvent = args.onEvent
     this.onCooldownFallback = args.onCooldownFallback
     this.log = args.log
@@ -437,7 +477,12 @@ export class RouterModel implements LanguageModelV3 {
             catalog: await loadModelsDevCatalog({ log: this.log }),
           })
     const resolved = await resolveCandidates({ presetModels: compatible.presetModels })
-    const candidates = resolved.candidates
+    const headers = new Headers()
+    for (const [key, value] of Object.entries(options.headers ?? {})) {
+      if (value !== undefined) headers.set(key, value)
+    }
+    const affinityKey = headers.get(ROUTE_AFFINITY_HEADER)
+    const candidates = this.affinity?.prioritize(affinityKey, resolved.candidates) ?? resolved.candidates
     const skipped = [...compatible.skipped, ...resolved.skipped]
     for (const reason of skipped) {
       emitLog(this.log, { level: 'info', message: `skip ${reason}` })
@@ -489,7 +534,10 @@ export class RouterModel implements LanguageModelV3 {
               }),
             )
         : result
-      if (inspected.ok) return inspected.value
+      if (inspected.ok) {
+        this.affinity?.select(affinityKey, candidate)
+        return inspected.value
+      }
 
       const error = inspected.error
       const action = classifyFailure(failureDetailsFromError(error))
@@ -689,6 +737,7 @@ function candidateCallOptions({
   headers.delete(OPENAI_WEBSOCKET_TITLE_HEADER)
   headers.delete(OPENCODE_AGENT_HEADER)
   headers.delete(OPENCODE_VARIANT_HEADER)
+  headers.delete(ROUTE_AFFINITY_HEADER)
   if (candidate.provider === 'openai' && sessionId) {
     headers.set(OPENAI_WEBSOCKET_SESSION_HEADER, sessionId)
   }
@@ -703,6 +752,7 @@ function candidateCallOptions({
  */
 export function createSubrouter(
   options: {
+    affinity?: RouteAffinity
     onEvent?: (event: RouterEvent) => void
     onCooldownFallback?: (notice: CooldownFallbackNotice) => void | Promise<void>
     log?: SubrouterLog
@@ -711,6 +761,7 @@ export function createSubrouter(
   const model = (preset: string) =>
     new RouterModel({
       preset,
+      affinity: options.affinity,
       onEvent: options.onEvent,
       onCooldownFallback: options.onCooldownFallback,
       log: options.log,

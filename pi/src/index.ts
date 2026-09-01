@@ -1,6 +1,6 @@
 /** Pi extension that routes subrouter presets through Pi's native providers.
- * Anthropic OAuth also strips Pi's self-identifying system prompt.
- * session_shutdown closes this copy's Codex sockets so `pi -p` can exit. */
+ * Tool follow-ups stay on one route until the agent settles. Anthropic OAuth
+ * strips Pi's identity. session_shutdown closes Codex sockets for `pi -p`. */
 
 import {
   createAssistantMessageEventStream,
@@ -17,6 +17,7 @@ import {
   type StreamOptions,
 } from '@earendil-works/pi-ai'
 import { closeOpenAICodexWebSocketSessions } from '@earendil-works/pi-ai/api/openai-codex-responses'
+import crypto from 'node:crypto'
 import { openAICompletionsApi } from '@earendil-works/pi-ai/api/openai-completions.lazy'
 import { builtinProviders } from '@earendil-works/pi-ai/providers/all'
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
@@ -39,6 +40,7 @@ import {
   resolveActiveCandidate,
   resolveCandidates,
   resolvePresetModels,
+  RouteAffinity,
   updateAccount,
   type Candidate,
   type ProviderId,
@@ -272,15 +274,20 @@ function streamPreset({
   context,
   options,
   providers,
+  affinity,
+  activeRouteKeys,
   log,
 }: {
   model: Model<Api>
   context: Context
   options?: StreamOptions
   providers: Map<string, Provider>
+  affinity: RouteAffinity
+  activeRouteKeys: Map<string, string>
   log?: SubrouterLog
 }) {
   const stream = createAssistantMessageEventStream()
+  const routeKey = options?.sessionId ? activeRouteKeys.get(options.sessionId) ?? null : null
 
   void (async () => {
     const presetModels = await resolvePresetModels(model.id)
@@ -289,7 +296,9 @@ function streamPreset({
       return
     }
 
-    const { candidates, skipped } = await resolveCandidates({ presetModels })
+    const resolved = await resolveCandidates({ presetModels })
+    const candidates = affinity.prioritize(routeKey, resolved.candidates)
+    const skipped = resolved.skipped
     if (candidates.length === 0) {
       endWithError({
         stream,
@@ -391,6 +400,10 @@ function streamPreset({
         }
         if (!committed) {
           committed = true
+          const activeRouteKey = options?.sessionId
+            ? activeRouteKeys.get(options.sessionId) ?? null
+            : null
+          if (activeRouteKey === routeKey) affinity.select(routeKey, candidate)
           model.name = formatCandidateRef(candidate)
           if (start) stream.push(start)
         }
@@ -417,7 +430,11 @@ function streamPreset({
   return stream
 }
 
-async function createSubrouterProvider(args: { log?: SubrouterLog } = {}) {
+async function createSubrouterProvider(args: {
+  affinity: RouteAffinity
+  activeRouteKeys: Map<string, string>
+  log?: SubrouterLog
+}) {
   const presets = await loadPresets()
   const names = new Set([DEFAULT_PRESET_NAME, ...Object.keys(presets.presets)])
   const resolved = await Promise.all(
@@ -491,16 +508,52 @@ async function createSubrouterProvider(args: { log?: SubrouterLog } = {}) {
       },
     },
     getModels: () => models,
-    stream: (model, context, options) => streamPreset({ model, context, options, providers, log: args.log }),
-    streamSimple: (model, context, options) => streamPreset({ model, context, options, providers, log: args.log }),
+    stream: (model, context, options) =>
+      streamPreset({
+        model,
+        context,
+        options,
+        providers,
+        affinity: args.affinity,
+        activeRouteKeys: args.activeRouteKeys,
+        log: args.log,
+      }),
+    streamSimple: (model, context, options) =>
+      streamPreset({
+        model,
+        context,
+        options,
+        providers,
+        affinity: args.affinity,
+        activeRouteKeys: args.activeRouteKeys,
+        log: args.log,
+      }),
   } satisfies Provider
 }
 
 export default async function subrouterPiExtension(pi: ExtensionAPI) {
-  pi.registerProvider(await createSubrouterProvider())
+  const affinity = new RouteAffinity()
+  const activeRouteKeys = new Map<string, string>()
+  pi.registerProvider(await createSubrouterProvider({ affinity, activeRouteKeys }))
+  pi.on('before_agent_start', (_event, context) => {
+    const sessionId = context.sessionManager.getSessionId()
+    const previous = activeRouteKeys.get(sessionId)
+    if (previous) affinity.clear(previous)
+    activeRouteKeys.set(sessionId, crypto.randomUUID())
+  })
+  pi.on('agent_settled', (_event, context) => {
+    const sessionId = context.sessionManager.getSessionId()
+    const routeKey = activeRouteKeys.get(sessionId)
+    if (routeKey) affinity.clear(routeKey)
+    activeRouteKeys.delete(sessionId)
+  })
   // The CLI bundle has its own pi-ai copy. This plugin's Codex sockets live
   // here, so CLI session.dispose() cannot close them. Close on shutdown.
-  pi.on('session_shutdown', () => {
+  pi.on('session_shutdown', (_event, context) => {
+    const sessionId = context.sessionManager.getSessionId()
+    const routeKey = activeRouteKeys.get(sessionId)
+    if (routeKey) affinity.clear(routeKey)
+    activeRouteKeys.delete(sessionId)
     closeOpenAICodexWebSocketSessions()
   })
 }
