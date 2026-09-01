@@ -2,6 +2,20 @@
 
 # Changelog
 
+## 0.4.0
+
+1. **Show when a message starts on a fallback model.** If the preferred subscription is already rate limited, OpenCode adds an ignored notice after the turn finishes:
+
+   ```text
+   Subrouter: openai/gpt-5.5 was rate limited. This message started with anthropic/claude-opus-4-6.
+   ```
+
+   The notice stays visible in session history, is never sent to the model, and cannot start another model turn. Preset labels now stay stable, such as `build`, instead of showing a stale startup candidate.
+
+2. **Route PDFs and other media through compatible fallbacks.** OpenCode model metadata now uses the input modalities published by models.dev instead of claiming every provider supports every attachment. Mixed presets advertise the union of usable candidates, and Subrouter skips candidates that cannot accept the current prompt while preserving the configured ranking. Registered metadata also preserves models.dev input-token limits.
+
+3. **Keep plugin runtime logs inside OpenCode.** Subrouter no longer writes to stdout or stderr when OpenCode loads the plugin or routes a request. Logs use an instance-specific callback passed through provider options, so separate provider instances cannot leak log destinations into each other.
+
 ## 0.3.0
 
 1. **Log which subscription is tried** when OpenCode prints logs:

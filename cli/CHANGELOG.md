@@ -2,6 +2,16 @@
 
 # Changelog
 
+## 0.5.0
+
+1. **Route media inputs only through compatible subscriptions.** Subrouter reads input modalities from models.dev and skips candidates that cannot accept the current prompt while preserving the configured ranking. A PDF request can now fail over from OpenAI without reaching a provider that cannot transport PDFs. Registered model metadata also preserves models.dev input-token limits.
+
+2. **Retry failures that happen before semantic stream output.** OpenAI WebSocket code 1006 disconnects and routed 401, 403, 429, usage-limit, and spending-limit failures now cool down the failed account and reach OpenCode as retryable API errors. OpenCode can restart the turn on the next subscription instead of ending the session.
+
+   Failures after text, reasoning, or tool output still cool down the account but never replay the turn. This prevents duplicate output and repeated tool side effects.
+
+3. **Keep runtime logging local to each router instance.** `createSubrouter()` and `RouterModel` now accept a `log` callback, and cooldown fallback routing can be observed through `onCooldownFallback`. Subrouter no longer writes to stdout or stderr when a harness loads it or routes a request. Separate harnesses and provider instances cannot leak log destinations into each other.
+
 ## 0.4.0
 
 1. **Log which subscription is tried** when OpenCode prints logs. Cycle events go through `client.app.log`, never stdout:
