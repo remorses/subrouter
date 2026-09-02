@@ -2,7 +2,6 @@
     <br/>
     <br/>
     <h3>subrouter</h3>
-    <h4>Like OpenRouter, but for your personal AI subscriptions</h4>
     <p>When one subscription hits its limit, the next one takes over.</p>
     <br/>
     <br/>
@@ -43,7 +42,7 @@ Run the same command again to add another account from the same provider. Subrou
 npx @subrouter/cli status
 ```
 
-The built-in **`default` preset** ranks the newest model from each provider and automatically filters out providers without an account. You do not need to create a preset.
+The built-in **`default` preset** ranks the newest model from each provider. When Subrouter resolves a request, it skips providers without an account. You do not need to create a preset.
 
 ### 3. Connect your harness
 
@@ -66,9 +65,9 @@ pi install npm:@subrouter/pi
 pi --model subrouter/default
 ```
 
-When Claude hits its usage limit mid-session, the next request transparently goes to your ChatGPT subscription. When that one is exhausted too, it goes to Grok.
+When Claude hits its usage limit before output starts, Subrouter transparently retries the request with your ChatGPT subscription. When that subscription is exhausted too, it retries with Grok.
 
-Quota and authentication failures move through the pool until every subscription is out. Normal request errors return immediately, so Subrouter does not repeat a bad request across every subscription.
+Before output starts, quota and authentication failures move through the pool until every subscription is out. Normal request errors return immediately, so Subrouter does not repeat a bad request across every subscription.
 
 The CLI command reference below covers account management, custom presets, cooldowns, and shell completions.
 
@@ -77,7 +76,7 @@ The CLI command reference below covers account management, custom presets, coold
 
 ## How it works
 
-A preset is an ordered list of `provider/model` candidates. Subrouter walks that list, skips anything in cooldown, and retries on the next account or the next provider. After a candidate accepts a user message, tool follow-ups stay on that provider, model, and account until the agent settles. The next user message starts from the preset ranking again.
+A preset is an ordered list of `provider/model` candidates. Subrouter skips candidates in cooldown and retries quota or authentication failures on the next account or provider only before output starts. After output starts, tool follow-ups stay on that provider, model, and account until the agent settles. The next user message starts from the preset ranking again.
 
 ```diagram
                 opencode Go / Pi
@@ -91,23 +90,26 @@ A preset is an ordered list of `provider/model` candidates. Subrouter walks that
                 └──────────┬───────────────┘
                            │
                            v
-              for each candidate in order
-              (default preset: 1.anthropic
-                2.openai 3.xai 4.opencode-go
-               5.github-copilot 6.poe 7.minimax
-               8.kimi 9.zai 10.alibaba)
-                           │
-                           ├──> cooldown? ──> skip it
-                           │
-                           ├──> ok ────────> stream
-                           │
-                           └──> 429/402/quota
-                           │
-                           └──> cooldown current account
-                           │
-                           ├──> next candidate ──> rotate
-                           │
-                           └──> none left ───────> error
+               for each candidate in order
+               (default preset: 1. anthropic
+                 2. openai 3. xai 4. opencode-go
+                 5. github-copilot 6. poe 7. minimax
+                 8. kimi 9. zai 10. alibaba)
+                            v
+                   inspect each candidate
+                            │
+      ┬─────────────────────┼─────────────────────┬
+      v                     v                     v
+  cooldown           quota/auth failure       output starts
+                         before output
+      v                     v                     v
+     skip            cool down account          stream
+                            │
+                            v
+                    try next candidate
+                            │
+                            v
+                 none left? ──> error
 ```
 
 ### Accounts
@@ -118,10 +120,10 @@ Accounts live in `~/.subrouter/config.json`. Log in **multiple times to the same
 
 Cooldowns are **global per machine** (`~/.subrouter/config.json`). Once an account is rate limited, every session and every harness skips it until the cooldown expires.
 
-| Response                | Cooldown                                                          |
-| ----------------------- | ----------------------------------------------------------------- |
+| Response                | Cooldown                                                           |
+| ----------------------- | ------------------------------------------------------------------ |
 | `429` rate limited      | `retry-after` / `retry-after-ms` when present, otherwise 5 minutes |
-| `402` balance exhausted | 6 hours                                                           |
+| `402` balance exhausted | 6 hours                                                            |
 
 ### Presets
 
@@ -140,7 +142,7 @@ OpenAI stream  <── response translator <── Anthropic / Gemini stream
 
 Subrouter
                     subrouter chooses account + model
-                                   │
+                                   v
               ┌────────────────────┴────────────────────┐
               v                                         v
 OpenCode request ──> official AI SDK provider    Pi request ──> Pi native provider
@@ -242,38 +244,32 @@ curl 'http://localhost:53692/callback?code=...&state=...'
 # Authentication successful. You can close this window.
 ```
 
-The server accepts any `GET`, so this is the same request the browser would have made.
+The callback endpoint accepts the browser's `GET` redirect request, so curl can replay the same redirect URL.
 
 > [!IMPORTANT]
 > The redirect URL contains a **one-time credential**. Run the curl command on the machine that started the login. Do not paste the URL into a shared chat or issue.
 
 ```diagram
 subrouter login anthropic
-        │
-        ├──> daemon listens on 127.0.0.1:53692  <── curl replay works here
+        v
+        ├──> callback server listens on 127.0.0.1:53692  <── curl replay works here
         │
         └──> 30 min timeout ──> server closes ──> replay gets connection refused
 ```
 
 The window is **30 minutes**. After that the callback server closes and curl replay stops working, so run `login` again. In an interactive terminal with the browser on another machine, set `SUBROUTER_MANUAL_OAUTH=1`; Subrouter prints the authorize URL, then asks for the final redirect URL.
 
-The `default` preset is built in. It uses the newest model from each provider in the order shown above, filtered to subscriptions with stored accounts. Create a preset named `default` to override it.
+The `default` preset is built in. It ranks the newest model from each provider in the order shown above. When Subrouter resolves a request, it skips providers without stored accounts. Create a preset named `default` to override it.
 
 ## opencode Go plugin
 
-`@subrouter/opencode` registers a `subrouter` provider inside opencode Go via the plugin `config` hook. Each preset becomes a model. Add it to `~/.config/opencode/opencode.json`:
+`@subrouter/opencode` registers a `subrouter` provider inside opencode Go via the plugin `config` hook. Each preset becomes a model. For installation, see [Connect your harness](#3-connect-your-harness).
 
-```json
-{
-  "plugin": ["@subrouter/opencode"]
-}
-```
-
-Then pick `subrouter/default` (or any `subrouter/<preset>`) as the model. Presets created after opencode Go starts appear on the next opencode Go restart.
+Pick `subrouter/default` (or any `subrouter/<preset>`) as the model. Presets created after opencode Go starts appear on the next opencode Go restart.
 
 ### Use cases
 
-**Rotate when credits run out.** Log in more than one account. When the first subscription hits a rate limit or spends its quota, Subrouter cools it down and sends the next request to the next account. You keep working.
+**Rotate when credits run out.** Log in more than one account. When the first subscription hits a rate limit or spends its quota before output starts, Subrouter cools it down and retries the request with the next account. You keep working.
 
 ```bash
 npx @subrouter/cli login anthropic
@@ -281,7 +277,7 @@ npx @subrouter/cli login anthropic   # second Claude account
 npx @subrouter/cli login openai
 ```
 
-Pick `subrouter/default` as the session model. The next request after a 429 or 402 goes to the next account in the preset.
+Pick `subrouter/default` as the session model. On a 429 or 402 before output starts, Subrouter retries the request with the next account in the preset.
 
 **One model for every agent.** Point the session and every agent at a **subrouter preset**. You log in once per subscription. You do not re-login inside OpenCode when a provider dies. You do not change 100 agent files to swap `anthropic/...` for `openai/...`.
 
@@ -333,7 +329,7 @@ Any other Task subagent works the same way: set `model` to `subrouter/<preset>` 
                        │
                        v
       explore agent (model: subrouter/default)
-                       │
+                       v
                        ├──> first subscription 429 ──> cooldown
                        │
                        └──> next subscription ──> task continues
@@ -343,12 +339,7 @@ Any other Task subagent works the same way: set `model` to `subrouter/<preset>` 
 
 `@subrouter/pi` registers the same presets as models in Pi. It delegates each request to Pi's native provider stream. Poe and Alibaba use Pi's native OpenAI-compatible provider API. Subrouter selects the subscription, but it does not translate requests or responses between provider formats.
 
-```bash
-pi install npm:@subrouter/pi
-pi --model subrouter/default
-```
-
-Presets created after Pi starts appear after `/reload` or the next restart.
+Install the extension as shown in [Connect your harness](#3-connect-your-harness). Then use `subrouter/default` or another `subrouter/<preset>` model. Presets created after Pi starts appear after `/reload` or the next restart.
 
 ## Shell Completions
 
@@ -375,11 +366,12 @@ subrouter completions uninstall
 
 ## Development
 
-pnpm workspace with three packages:
+This pnpm workspace has four packages:
 
-- `cli/` — `@subrouter/cli`: account stores, presets, cooldown state, provider adapters and the routing engine (`RouterModel`, an AI SDK `LanguageModelV3`)
+- `cli/` — `@subrouter/cli`: account stores, presets, cooldown state, provider adapters, and the routing engine (`RouterModel`, an AI SDK `LanguageModelV3`)
 - `opencode/` — `@subrouter/opencode`: the opencode Go plugin plus the provider entry opencode Go loads
 - `pi/` — `@subrouter/pi`: a native Pi provider that delegates to Pi's provider streams without format translation
+- `website/` — private `subrouter-website`: the Holocron documentation site for subrouter.org
 
 ```bash
 pnpm install
@@ -397,6 +389,7 @@ The e2e tests boot real opencode Go and Pi harness runtimes, point every adapter
 | ----------------------------------------- | -------------------------------------------------------- |
 | `SUBROUTER_HOME`                          | State directory (default `~/.subrouter`)                 |
 | `SUBROUTER_MANUAL_OAUTH`                  | Ask for pasted redirect URL (browser on another machine) |
+| `SUBROUTER_MODELS_DEV_URL`                | Override the models.dev catalog URL (tests)              |
 | `SUBROUTER_ANTHROPIC_BASE_URL`            | Override the Anthropic API base URL (tests)              |
 | `SUBROUTER_OPENAI_BASE_URL`               | Override the Codex API base URL (tests)                  |
 | `SUBROUTER_OPENAI_ISSUER_URL`             | Override the OpenAI auth host (tests)                    |
