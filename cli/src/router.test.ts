@@ -30,7 +30,12 @@ type MockResponse = { status: number; headers?: Record<string, string>; body: st
 
 type MockServer = {
   url: string
-  requests: { path: string; authorization: string | undefined; body: string }[]
+  requests: {
+    path: string
+    authorization: string | undefined
+    userAgent: string | undefined
+    body: string
+  }[]
   close: () => Promise<void>
 }
 
@@ -65,6 +70,7 @@ async function startMockServer(respond: (request: { path: string }) => MockRespo
       requests.push({
         path: req.url ?? '',
         authorization: req.headers.authorization,
+        userAgent: req.headers['user-agent'],
         body,
       })
       const response = respond({ path: req.url ?? '' })
@@ -91,6 +97,7 @@ async function startChatSseServer({
       requests.push({
         path: req.url ?? '',
         authorization: req.headers.authorization,
+        userAgent: req.headers['user-agent'],
         body,
       })
       res.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -292,6 +299,10 @@ describe('RouterModel failover', () => {
     `)
     expect(anthropicMock.requests.length).toBe(2)
     expect(anthropicMock.requests.map((r) => r.authorization)).toEqual(['Bearer acc2', 'Bearer acc1'])
+    expect(anthropicMock.requests.map((r) => r.userAgent)).toEqual([
+      'claude-cli/2.1.257 (external, cli)',
+      'claude-cli/2.1.257 (external, cli)',
+    ])
     expect(opencodeMock.requests[0]!.authorization).toBe('Bearer zen-key')
 
     // Both anthropic accounts are now cooling down globally

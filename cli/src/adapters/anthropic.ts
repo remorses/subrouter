@@ -47,7 +47,7 @@ const SCOPES =
 // 30 min: a login driven from a chat harness needs time for the human to see the
 // URL, solve hCaptcha and approve. Under 5 min the callback server dies first.
 const OAUTH_TIMEOUT_MS = 30 * 60 * 1000
-const CLAUDE_CODE_VERSION = '2.1.75'
+const CLAUDE_CODE_USER_AGENT = 'claude-cli/2.1.257 (external, cli)'
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
 const OPENCODE_IDENTITY = 'You are OpenCode, the best coding agent on the planet.'
@@ -130,7 +130,7 @@ async function fetchAccountIdentity(accessToken: string) {
       headers: {
         Accept: 'application/json',
         authorization: `Bearer ${accessToken}`,
-        'user-agent': `claude-cli/${CLAUDE_CODE_VERSION}`,
+        'user-agent': CLAUDE_CODE_USER_AGENT,
         'x-app': 'cli',
       },
     }).catch(() => null)
@@ -608,7 +608,7 @@ function buildFetch({ account, persist }: { account: StoredAccount; persist: Per
     headers.set('anthropic-beta', mergeBetas(headers.get('anthropic-beta'), betas))
     headers.set('anthropic-dangerous-direct-browser-access', 'true')
     headers.set('authorization', `Bearer ${access}`)
-    headers.set('user-agent', `claude-cli/${CLAUDE_CODE_VERSION}`)
+    headers.set('user-agent', CLAUDE_CODE_USER_AGENT)
     headers.set('x-app', 'cli')
     headers.delete('x-api-key')
 
