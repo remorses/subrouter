@@ -67,21 +67,36 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
   const log = opencodeLog(client)
   const affinity = new RouteAffinity()
   const activeMessages = new Map<string, string>()
-  const pendingNotices = new Map<
-    string,
-    { agent: string; variant?: string; preset: string; text: string }
-  >()
-  const onCooldownFallback = (notice: CooldownFallbackNotice) => {
-    if (!client || !notice.sessionID || !notice.agent || notice.agent === 'title') return
-    if (pendingNotices.has(notice.sessionID)) return
+  const deliveredNotices = new Map<string, { text: string; expiresAt: number }>()
+  const onCooldownFallback = async (notice: CooldownFallbackNotice) => {
+    if (!notice.sessionID || !notice.agent || notice.agent === 'title') return
     const preferred = `${notice.preferred.provider}/${notice.preferred.modelId}`
     const active = `${notice.active.provider}/${notice.active.modelId}`
-    pendingNotices.set(notice.sessionID, {
+    const text = `Subrouter: Using ${active} because ${preferred} is rate limited.`
+    const delivered = deliveredNotices.get(notice.sessionID)
+    if (delivered?.text === text && delivered.expiresAt > Date.now()) return
+    const current = { text, expiresAt: Date.now() + notice.preferred.retryAfterMs }
+    deliveredNotices.set(notice.sessionID, current)
+    const body = {
+      noReply: true,
       agent: notice.agent,
+      model: { providerID: PROVIDER_ID, modelID: notice.preset },
       variant: notice.variant,
-      preset: notice.preset,
-      text: `Subrouter: ${preferred} was rate limited. This message started with ${active}.`,
-    })
+      parts: [{ type: 'text' as const, text, ignored: true }],
+    }
+    const result = await client.session
+      .prompt({
+        path: { id: notice.sessionID },
+        query: { directory },
+        body,
+        throwOnError: true,
+      })
+      .catch((cause) => new Error('failed to persist cooldown fallback notice', { cause }))
+    if (!(result instanceof Error)) return
+    if (deliveredNotices.get(notice.sessionID) === current) {
+      deliveredNotices.delete(notice.sessionID)
+    }
+    void log?.({ level: 'warn', message: result.message })
   }
   return {
     config: async (config) => {
@@ -152,27 +167,19 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
       }
     },
     event: async ({ event }) => {
-      if (event.type !== 'session.idle') return
-      const messageID = activeMessages.get(event.properties.sessionID)
-      if (messageID) affinity.clear(messageID)
-      activeMessages.delete(event.properties.sessionID)
-      const pending = pendingNotices.get(event.properties.sessionID)
-      if (!pending) return
-      pendingNotices.delete(event.properties.sessionID)
-      const body = {
-        noReply: true,
-        agent: pending.agent,
-        model: { providerID: PROVIDER_ID, modelID: pending.preset },
-        variant: pending.variant,
-        parts: [{ type: 'text' as const, text: pending.text, ignored: true }],
+      if (event.type === 'session.deleted') {
+        const sessionID = event.properties.info.id
+        const messageID = activeMessages.get(sessionID)
+        if (messageID) affinity.clear(messageID)
+        activeMessages.delete(sessionID)
+        deliveredNotices.delete(sessionID)
+        return
       }
-      await client.session
-        .prompt({
-          path: { id: event.properties.sessionID },
-          query: { directory },
-          body,
-        })
-        .catch(() => {})
+      if (event.type !== 'session.idle') return
+      const sessionID = event.properties.sessionID
+      const messageID = activeMessages.get(sessionID)
+      if (messageID) affinity.clear(messageID)
+      activeMessages.delete(sessionID)
     },
     'chat.headers': async (input, output) => {
       const activeMessage = activeMessages.get(input.sessionID) ?? input.message.id

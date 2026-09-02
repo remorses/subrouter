@@ -6,7 +6,7 @@ import path from 'node:path'
 import util from 'node:util'
 import { afterEach, beforeEach, expect, test } from 'vitest'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
-import { createOpencodeClient, type Event } from '@opencode-ai/sdk'
+import { createOpencodeClient } from '@opencode-ai/sdk'
 import {
   addAccount,
   adapters,
@@ -180,8 +180,8 @@ test('provider log callback forwards only to client.app.log', async () => {
   })
 })
 
-test('cooldown fallback creates only a persisted ignored notice after idle', async () => {
-  const requests: Array<{ path: string; body: any }> = []
+test('cooldown fallback persists one ignored notice during the active run', async () => {
+  const requests: Array<{ path: string; body: Record<string, unknown> }> = []
   const server = createServer((req, res) => {
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => chunks.push(chunk))
@@ -205,27 +205,17 @@ test('cooldown fallback creates only a persisted ignored notice after idle', asy
   const onCooldownFallback = config.provider?.subrouter?.options?.onCooldownFallback
   expect(onCooldownFallback).toBeTypeOf('function')
   if (typeof onCooldownFallback !== 'function') throw new Error('expected cooldown callback')
-
-  await onCooldownFallback({
+  const notice = {
     sessionID: 'session-1',
     agent: 'build',
     variant: 'high',
     preset: 'work',
-    preferred: { provider: 'xai', modelId: 'grok-4.6', retryAfterMs: 252_000 },
+    preferred: { provider: 'xai', modelId: 'grok-4.6', retryAfterMs: 250_000 },
     active: { provider: 'openai', modelId: 'gpt-5.6-sol' },
-  })
-  await onCooldownFallback({
-    sessionID: 'session-1',
-    agent: 'compaction',
-    preset: 'work',
-    preferred: { provider: 'xai', modelId: 'grok-4.6', retryAfterMs: 251_000 },
-    active: { provider: 'anthropic', modelId: 'claude-sonnet-5' },
-  })
-  const event: Event = {
-    type: 'session.idle',
-    properties: { sessionID: 'session-1' },
-  }
-  await hooks.event?.({ event })
+  } as const
+
+  await onCooldownFallback(notice)
+  await onCooldownFallback(notice)
 
   expect(requests).toEqual([
     {
@@ -238,7 +228,7 @@ test('cooldown fallback creates only a persisted ignored notice after idle', asy
         parts: [
           {
             type: 'text',
-            text: 'Subrouter: xai/grok-4.6 was rate limited. This message started with openai/gpt-5.6-sol.',
+            text: 'Subrouter: Using openai/gpt-5.6-sol because xai/grok-4.6 is rate limited.',
             ignored: true,
           },
         ],

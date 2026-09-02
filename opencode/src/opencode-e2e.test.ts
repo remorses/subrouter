@@ -366,7 +366,7 @@ describe('opencode + subrouter provider', () => {
     expect(zenMock.requests.length).toBeGreaterThan(0)
   }, 120_000)
 
-  test('a pre-existing cooldown leaves a visible ignored route notice without another model turn', async () => {
+  test('a pre-existing cooldown appends one ignored notice without another model turn', async () => {
     const client = createOpencodeClient({ baseUrl: server.url })
     const session = await client.session.create({
       query: { directory: projectDir },
@@ -396,29 +396,17 @@ describe('opencode + subrouter provider', () => {
           path: { id: session.data!.id },
           query: { directory: projectDir },
         })
-        return (messages.data ?? []).some(({ parts }) =>
-          parts.some(
-            (part) =>
-              part.type === 'text' &&
-              part.ignored === true &&
-              part.text.includes('was rate limited. This message started with opencode-go/'),
-          ),
-        )
+        return (messages.data ?? []).filter(({ parts }) =>
+          parts.some((part) => part.type === 'text' && part.ignored === true),
+        ).length
       })
-      .toBe(true)
+      .toBe(1)
 
     const messages = await client.session.messages({
       path: { id: session.data!.id },
       query: { directory: projectDir },
     })
-    const notice = (messages.data ?? []).find(({ parts }) =>
-      parts.some((part) => part.type === 'text' && part.ignored === true),
-    )
-    expect(notice?.info).toMatchObject({
-      role: 'user',
-      agent: 'build',
-      model: { providerID: 'subrouter', modelID: 'default' },
-    })
+    expect((messages.data ?? []).filter(({ info }) => info.role === 'user')).toHaveLength(2)
     expect((messages.data ?? []).filter(({ info }) => info.role === 'assistant')).toHaveLength(1)
     expect(zenMock.requests).toHaveLength(requestsBefore + 1)
   }, 120_000)
