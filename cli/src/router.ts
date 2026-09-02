@@ -359,6 +359,26 @@ export async function resolveActiveCandidate(preset: string) {
 
 type Attempt<T> = { ok: true; value: T } | { ok: false; error: Error }
 
+function messageFromUnknownError<T>(value: T) {
+  if (value instanceof Error) return value.message
+  if (typeof value === 'string' && value.length > 0) return value
+  const message = Reflect.get(Object(value), 'message')
+  if (typeof message === 'string' && message.length > 0) return message
+  const nested = Object(Reflect.get(Object(value), 'error'))
+  const nestedMessage = Reflect.get(nested, 'message')
+  if (typeof nestedMessage === 'string' && nestedMessage.length > 0) return nestedMessage
+  const code = Reflect.get(nested, 'code')
+  if (typeof code === 'string' && code.length > 0) return code
+  const type = Reflect.get(nested, 'type')
+  if (typeof type === 'string' && type.length > 0) return type
+  return 'Provider stream error'
+}
+
+function errorFromUnknown<T>(value: T) {
+  if (value instanceof Error) return value
+  return new Error(messageFromUnknownError(value), { cause: value })
+}
+
 export type RouterModelArgs = {
   /** preset name, exposed as the modelId */
   preset: string
@@ -520,7 +540,7 @@ export class RouterModel implements LanguageModelV3 {
           (value) => ({ ok: true as const, value }),
           (error) => ({
             ok: false as const,
-            error: error instanceof Error ? error : new Error(String(error)),
+            error: errorFromUnknown(error),
           }),
         )
       const inspected: Attempt<T> = result.ok
@@ -530,7 +550,7 @@ export class RouterModel implements LanguageModelV3 {
               (value) => value,
               (error) => ({
                 ok: false as const,
-                error: error instanceof Error ? error : new Error(String(error)),
+                error: errorFromUnknown(error),
               }),
             )
         : result
@@ -604,9 +624,7 @@ async function inspectStream({
   const reader = result.stream.getReader()
   const buffered: LanguageModelV3StreamPart[] = []
   while (true) {
-    const next = await reader
-      .read()
-      .catch((error) => (error instanceof Error ? error : new Error(String(error))))
+    const next = await reader.read().catch(errorFromUnknown)
     if (next instanceof Error) {
       await reader.cancel(next).catch(() => {})
       return { ok: false, error: next }
@@ -618,10 +636,7 @@ async function inspectStream({
       }
     }
     if (next.value.type === 'error') {
-      const error =
-        next.value.error instanceof Error
-          ? next.value.error
-          : new Error(String(next.value.error))
+      const error = errorFromUnknown(next.value.error)
       await reader.cancel(error).catch(() => {})
       return { ok: false, error }
     }
@@ -664,9 +679,7 @@ function continueStream({
         controller.enqueue(part)
         return
       }
-      const next = await reader
-        .read()
-        .catch((error) => (error instanceof Error ? error : new Error(String(error))))
+      const next = await reader.read().catch(errorFromUnknown)
       if (next instanceof Error) {
         controller.error(await record(next))
         return
@@ -676,10 +689,7 @@ function continueStream({
         return
       }
       if (next.value.type === 'error') {
-        const error =
-          next.value.error instanceof Error
-            ? next.value.error
-            : new Error(String(next.value.error))
+        const error = errorFromUnknown(next.value.error)
         controller.enqueue({ ...next.value, error: await record(error) })
         return
       }

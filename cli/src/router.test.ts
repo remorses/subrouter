@@ -253,6 +253,7 @@ afterEach(async () => {
   delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_ANTHROPIC_BASE_URL
   delete process.env.SUBROUTER_MODELS_DEV_URL
+  delete process.env.SUBROUTER_OPENAI_BASE_URL
   delete process.env.SUBROUTER_OPENCODE_GO_BASE_URL
   for (const server of servers) await server.close()
   servers = []
@@ -761,6 +762,57 @@ describe('RouterModel failover', () => {
       if (part.type === 'text-delta') parts.push(part.delta)
     }
     expect(parts.join('')).toBe('hello')
+  })
+
+  test('preserves structured OpenAI stream errors and records their cooldown', async () => {
+    const openaiMock = await startChatSseServer({
+      writeBody: (res) => {
+        res.end(
+          `data: ${JSON.stringify({
+            type: 'error',
+            sequence_number: 1,
+            error: {
+              type: 'rate_limit_error',
+              code: 'rate_limit_exceeded',
+              message: 'OpenAI rate limit reached',
+              param: null,
+            },
+          })}\n\n`,
+        )
+      },
+    })
+    servers = [openaiMock]
+    process.env.SUBROUTER_OPENAI_BASE_URL = openaiMock.url
+
+    await addAccount({
+      provider: 'openai',
+      account: oauthAccount({ accountId: 'account-1' }),
+    })
+    await savePreset({ name: 'test', models: ['openai/gpt-fake'] })
+
+    const result = await new RouterModel({ preset: 'test' }).doStream(callOptions)
+    const errors: unknown[] = []
+    for await (const part of result.stream) {
+      if (part.type === 'error') errors.push(part.error)
+    }
+
+    expect(errors).toHaveLength(1)
+    const error = errors[0]
+    expect(error).toBeInstanceOf(Error)
+    if (!(error instanceof Error)) throw new Error('expected stream error')
+    expect(error.message).toBe('OpenAI rate limit reached')
+    const streamError = error.cause
+    expect(streamError).toBeInstanceOf(Error)
+    if (!(streamError instanceof Error)) throw new Error('expected normalized stream error')
+    expect(streamError.cause).toMatchObject({
+      type: 'error',
+      error: {
+        type: 'rate_limit_error',
+        code: 'rate_limit_exceeded',
+        message: 'OpenAI rate limit reached',
+      },
+    })
+    expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:account-1'])
   })
 
   test('missing preset throws PresetNotFoundError', async () => {
