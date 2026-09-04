@@ -25,8 +25,9 @@ import type {
   LanguageModelV3CallOptions,
   LanguageModelV3StreamPart,
   LanguageModelV3StreamResult,
+  JSONValue,
 } from '@ai-sdk/provider'
-import { APICallError } from '@ai-sdk/provider'
+import { APICallError, isJSONObject } from '@ai-sdk/provider'
 import * as errore from 'errore'
 import {
   adapters,
@@ -760,6 +761,45 @@ async function recordStreamCooldown({
   })
 }
 
+const ENCRYPTED_REASONING = 'reasoning.encrypted_content'
+
+function withEncryptedReasoningInclude(include: JSONValue | undefined) {
+  const values = Array.isArray(include)
+    ? include.filter((item): item is string => typeof item === 'string')
+    : []
+  if (!values.includes(ENCRYPTED_REASONING)) values.push(ENCRYPTED_REASONING)
+  return values
+}
+
+function sdkProviderOptionsKey(provider: ProviderId) {
+  if (provider === 'openai' || provider === 'github-copilot') return 'openai'
+  if (provider === 'xai') return 'xai'
+  if (provider === 'anthropic') return 'anthropic'
+  return null
+}
+
+function candidateProviderOptions({
+  options,
+  candidate,
+}: {
+  options: LanguageModelV3CallOptions
+  candidate: Candidate
+}) {
+  const current = { ...options.providerOptions }
+  const sdkKey = sdkProviderOptionsKey(candidate.provider)
+  const harness = current[PROVIDER_ID]
+  if (sdkKey && isJSONObject(harness)) {
+    current[sdkKey] = { ...current[sdkKey], ...harness }
+  }
+  const openai = isJSONObject(current.openai) ? current.openai : {}
+  const xai = isJSONObject(current.xai) ? current.xai : {}
+  return {
+    ...current,
+    openai: { ...openai, store: false, include: withEncryptedReasoningInclude(openai.include) },
+    xai: { ...xai, store: false },
+  }
+}
+
 function candidateCallOptions({
   options,
   candidate,
@@ -785,11 +825,7 @@ function candidateCallOptions({
   return {
     ...options,
     headers: Object.fromEntries(headers),
-    providerOptions: {
-      ...options.providerOptions,
-      openai: { ...options.providerOptions?.openai, store: false },
-      xai: { ...options.providerOptions?.xai, store: false },
-    },
+    providerOptions: candidateProviderOptions({ options, candidate }),
   }
 }
 

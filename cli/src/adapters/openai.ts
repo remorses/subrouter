@@ -428,11 +428,9 @@ function codexEndpoint() {
 const ENCRYPTED_REASONING = 'reasoning.encrypted_content'
 
 /**
- * Codex requires store:false. OpenCode applies the rest of this patch only
- * when providerID is openai (strip reasoning item ids, request encrypted
- * reasoning). Subrouter is providerID subrouter, so the same rules live here.
- * Without them, follow-up turns send rs_* ids and Codex returns
- * "Items are not persisted when store is set to false".
+ * Codex requires store:false. RouterModel also sets this on AI SDK options.
+ * This fetch rewrite still strips item ids and drops reasoning with no
+ * encrypted content, because OpenCode only does that when providerID is openai.
  */
 export function patchCodexBody(body: string | undefined) {
   if (typeof body !== 'string' || body.length === 0) return body

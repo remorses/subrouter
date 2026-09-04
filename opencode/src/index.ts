@@ -163,12 +163,19 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
             takenApiIds.add(apiId)
             presetByApiId[apiId] = name
           }
+          const reasoning = candidate
+            ? (modelsDevModel({
+                provider: candidate.provider,
+                modelId: candidate.modelId,
+                catalog,
+              })?.reasoning ?? false)
+            : false
           const model: {
             name: string
             id?: string
             tool_call: true
             attachment: boolean
-            reasoning: false
+            reasoning: boolean
             modalities: {
               input: Array<'text' | 'audio' | 'image' | 'video' | 'pdf'>
               output: Array<'text'>
@@ -179,7 +186,7 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
             name,
             tool_call: true,
             attachment,
-            reasoning: false,
+            reasoning,
             modalities: {
               input: [...input],
               output: ['text'],

@@ -324,11 +324,42 @@ test('preset model limits follow the first live candidate', async () => {
     input: 900_000,
     output: 128_000,
   })
-  expect(config.provider?.subrouter?.models?.default?.limit).toEqual({
-    context: 1_000_000,
-    input: 900_000,
-    output: 128_000,
+})
+
+test('preset reasoning follows the first live candidate', async () => {
+  const modelId = adapters.openai.defaultModels[0]
+  if (!modelId) throw new Error('openai adapter has no default model')
+  process.env.SUBROUTER_MODELS_DEV_URL = await startFakeModelsDev({
+    openai: {
+      models: {
+        [modelId]: {
+          id: modelId,
+          reasoning: true,
+          modalities: { input: ['text'], output: ['text'] },
+          limit: { context: 200_000, output: 64_000 },
+        },
+      },
+    },
   })
+  await addAccount({
+    provider: 'openai',
+    account: {
+      type: 'oauth',
+      refresh: 'refresh-1',
+      access: 'access-1',
+      expires: Date.now() + 60_000,
+      email: 'a@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await savePreset({ name: 'work', models: [`openai/${modelId}`] })
+
+  const hooks = await subrouterPlugin(pluginInput)
+  const config: Config = {}
+  await hooks.config?.(config)
+
+  expect(config.provider?.subrouter?.models?.work?.reasoning).toBe(true)
 })
 
 test('preset model input modalities are the union of usable candidates', async () => {

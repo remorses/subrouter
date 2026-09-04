@@ -927,12 +927,21 @@ describe('RouterModel failover', () => {
     await addAccount({ provider: 'xai', account: oauthAccount({ accountId: 'xai-1' }) })
     await savePreset({ name: 'test', models: ['xai/grok-4.6'] })
 
-    const result = await new RouterModel({ preset: 'test' }).doGenerate(callOptions)
+    const result = await new RouterModel({ preset: 'test' }).doGenerate({
+      ...callOptions,
+      providerOptions: { subrouter: { reasoningEffort: 'low' } },
+    })
     const texts = result.content.filter((part) => part.type === 'text').map((part) => part.text)
     expect(texts).toEqual(['ok'])
 
-    const body = JSON.parse(xaiMock.requests[0]!.body) as { store?: boolean }
+    const body = JSON.parse(xaiMock.requests[0]!.body) as {
+      store?: boolean
+      include?: string[]
+      reasoning?: { effort?: string }
+    }
     expect(body.store).toBe(false)
+    expect(body.include).toEqual(['reasoning.encrypted_content'])
+    expect(body.reasoning).toEqual({ effort: 'low' })
   })
 
   test('missing preset throws PresetNotFoundError', async () => {
