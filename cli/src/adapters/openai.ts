@@ -427,19 +427,6 @@ function codexEndpoint() {
 
 const ENCRYPTED_REASONING = 'reasoning.encrypted_content'
 
-/** @ai-sdk/openai defaults store to true and then emits item_reference ids. */
-export function withCodexProviderOptions<T extends { providerOptions?: { openai?: { store?: boolean } } }>(
-  options: T,
-): T {
-  return {
-    ...options,
-    providerOptions: {
-      ...options.providerOptions,
-      openai: { ...options.providerOptions?.openai, store: false },
-    },
-  }
-}
-
 /**
  * Codex requires store:false. OpenCode applies the rest of this patch only
  * when providerID is openai (strip reasoning item ids, request encrypted

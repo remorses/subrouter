@@ -261,11 +261,11 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_ANTHROPIC_BASE_URL
   delete process.env.SUBROUTER_MODELS_DEV_URL
   delete process.env.SUBROUTER_OPENAI_BASE_URL
   delete process.env.SUBROUTER_OPENCODE_GO_BASE_URL
+  delete process.env.SUBROUTER_XAI_BASE_URL
   for (const server of servers) await server.close()
   servers = []
   await rm(home, { recursive: true, force: true })
@@ -897,6 +897,42 @@ describe('RouterModel failover', () => {
       },
     })
     expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:account-1'])
+  })
+
+  test('xai responses send store false so large replies are not rejected', async () => {
+    const xaiOk: MockResponse = {
+      status: 200,
+      body: JSON.stringify({
+        id: 'resp_1',
+        object: 'response',
+        created_at: 1,
+        status: 'completed',
+        model: 'grok-4.6',
+        output: [
+          {
+            type: 'message',
+            id: 'msg_1',
+            status: 'completed',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+          },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      }),
+    }
+    const xaiMock = await startMockServer(() => xaiOk)
+    servers = [xaiMock]
+    process.env.SUBROUTER_XAI_BASE_URL = `${xaiMock.url}/v1`
+
+    await addAccount({ provider: 'xai', account: oauthAccount({ accountId: 'xai-1' }) })
+    await savePreset({ name: 'test', models: ['xai/grok-4.6'] })
+
+    const result = await new RouterModel({ preset: 'test' }).doGenerate(callOptions)
+    const texts = result.content.filter((part) => part.type === 'text').map((part) => part.text)
+    expect(texts).toEqual(['ok'])
+
+    const body = JSON.parse(xaiMock.requests[0]!.body) as { store?: boolean }
+    expect(body.store).toBe(false)
   })
 
   test('missing preset throws PresetNotFoundError', async () => {

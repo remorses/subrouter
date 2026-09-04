@@ -42,7 +42,7 @@ import {
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
 } from './adapters/openai-websocket.ts'
-import { withCodexProviderOptions } from './adapters/openai.ts'
+
 import {
   isCoolingDown,
   loadAccounts,
@@ -782,8 +782,15 @@ function candidateCallOptions({
     headers.set(OPENAI_WEBSOCKET_SESSION_HEADER, sessionId)
   }
   if (candidate.provider === 'openai' && title) headers.set(OPENAI_WEBSOCKET_TITLE_HEADER, title)
-  const next = { ...options, headers: Object.fromEntries(headers) }
-  return candidate.provider === 'openai' ? withCodexProviderOptions(next) : next
+  return {
+    ...options,
+    headers: Object.fromEntries(headers),
+    providerOptions: {
+      ...options.providerOptions,
+      openai: { ...options.providerOptions?.openai, store: false },
+      xai: { ...options.providerOptions?.xai, store: false },
+    },
+  }
 }
 
 /**

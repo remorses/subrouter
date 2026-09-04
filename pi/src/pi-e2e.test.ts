@@ -372,6 +372,7 @@ describe.sequential('@subrouter/pi', () => {
     ])
     codexWebSocketServer = undefined
     for (const name of envNames) {
+      if (name === 'SUBROUTER_HOME') continue
       const value = savedEnv[name]
       if (value === undefined) delete process.env[name]
       else process.env[name] = value

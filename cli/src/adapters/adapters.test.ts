@@ -20,7 +20,7 @@ import {
   patchCopilotBody,
   shouldUseCopilotResponses,
 } from './github-copilot.ts'
-import { buildOpenAIAuthorizeUrl, patchCodexBody, withCodexProviderOptions } from './openai.ts'
+import { buildOpenAIAuthorizeUrl, patchCodexBody } from './openai.ts'
 import { buildPoeAuthorizeUrl, parsePoeCallbackInput } from './poe.ts'
 
 describe('classifyFailure', () => {
@@ -683,11 +683,5 @@ describe('patchCodexBody', () => {
       { type: 'function_call', call_id: 'call_1', name: 'bash', arguments: '{}' },
       { type: 'item_reference', id: 'fc_keep' },
     ])
-  })
-
-  test('withCodexProviderOptions forces store false for the AI SDK', () => {
-    expect(withCodexProviderOptions({ providerOptions: { openai: { store: true } } })).toEqual({
-      providerOptions: { openai: { store: false } },
-    })
   })
 })

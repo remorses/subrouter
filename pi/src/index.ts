@@ -551,21 +551,21 @@ export default async function subrouterPiExtension(pi: ExtensionAPI) {
     if (previous) affinity.clear(previous)
     activeRouteKeys.set(sessionId, crypto.randomUUID())
   })
-  pi.on('agent_settled', (_event, context) => {
+  pi.on('agent_settled', async (_event, context) => {
     const sessionId = context.sessionManager.getSessionId()
     const routeKey = activeRouteKeys.get(sessionId)
     if (routeKey) affinity.clear(routeKey)
     activeRouteKeys.delete(sessionId)
-    void clearLiveRoute(sessionId)
+    await clearLiveRoute(sessionId)
   })
   // The CLI bundle has its own pi-ai copy. This plugin's Codex sockets live
   // here, so CLI session.dispose() cannot close them. Close on shutdown.
-  pi.on('session_shutdown', (_event, context) => {
+  pi.on('session_shutdown', async (_event, context) => {
     const sessionId = context.sessionManager.getSessionId()
     const routeKey = activeRouteKeys.get(sessionId)
     if (routeKey) affinity.clear(routeKey)
     activeRouteKeys.delete(sessionId)
-    void clearLiveRoute(sessionId)
+    await clearLiveRoute(sessionId)
     closeOpenAICodexWebSocketSessions()
   })
 }

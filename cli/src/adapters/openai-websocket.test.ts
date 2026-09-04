@@ -153,7 +153,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   closeOpenAIWebSockets()
-  delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_OPENAI_BASE_URL
   for (const server of servers) await closeCodexServer(server)
   servers = []

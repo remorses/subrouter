@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import {
@@ -19,6 +19,7 @@ import {
   removePreset,
   saveLoginState,
   savePreset,
+  subrouterHome,
   updateAccount,
   writeJson,
   type StoredAccount,
@@ -33,8 +34,19 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  delete process.env.SUBROUTER_HOME
   await rm(home, { recursive: true, force: true })
+})
+
+describe('test home isolation', () => {
+  test('refuses to use ~/.subrouter while vitest is running', () => {
+    delete process.env.SUBROUTER_HOME
+    expect(() => subrouterHome()).toThrow(/SUBROUTER_HOME/)
+  })
+
+  test('refuses SUBROUTER_HOME pointed at ~/.subrouter', () => {
+    process.env.SUBROUTER_HOME = path.join(homedir(), '.subrouter')
+    expect(() => subrouterHome()).toThrow(/SUBROUTER_HOME/)
+  })
 })
 
 function oauthAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {

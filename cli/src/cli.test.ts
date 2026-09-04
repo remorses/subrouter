@@ -64,7 +64,6 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  delete process.env.SUBROUTER_HOME
   await rm(home, { recursive: true, force: true })
 })
 

@@ -15,7 +15,8 @@ subrouter must **never translate between AI wire formats**. This is the main rob
 - Format understanding is the harness's job, wired through `@subrouter/opencode` and `@subrouter/pi`. OpenCode uses the AI SDK. Pi uses its native provider streams. Subrouter only picks *which* subscription serves the request.
 - Adapters only touch requests where the subscription gateway **requires** it, and any rewrite must be reversed on the way out:
   - anthropic: OAuth traffic must look like Claude Code CLI (identity system block, tool-name renames, beta headers). The response stream maps tool names **back** to the originals, so the harness never sees the spoofing.
-  - openai (Codex backend): `store: false` on AI SDK providerOptions (SDK defaults to true and emits `item_reference`), `store: false` on the wire, `max_output_tokens` stripped, `include: reasoning.encrypted_content` added, stored item `id`s stripped from non-reference `input` items (drop reasoning with no encrypted content), URL rewritten to `chatgpt.com/backend-api/codex/responses`. Codex rejects `store: true`. OpenCode sets these when providerID is `openai`; subrouter must set them because the harness sees providerID `subrouter`.
+  - openai / xai Responses: `RouterModel` always sets `providerOptions.openai.store` and `providerOptions.xai.store` to `false`. Both SDKs default store to true. OpenCode only sets this when providerID is `openai`/`xai` or npm is `@ai-sdk/openai`/`@ai-sdk/xai`. Subrouter is providerID `subrouter` with a `file://` npm, so without this patch Codex emits `item_reference` ids and Grok rejects long replies with `Response is too large to store`. Extra namespaced keys are ignored by other SDKs.
+  - openai (Codex backend, fetch rewrite): `store: false` on the wire, `max_output_tokens` stripped, `include: reasoning.encrypted_content` added, stored item `id`s stripped from non-reference `input` items (drop reasoning with no encrypted content), URL rewritten to `chatgpt.com/backend-api/codex/responses`.
   - xai / opencode-go / poe / minimax / kimi / zai / alibaba: bearer injection only.
   - github-copilot: bearer injection, API-family routing, and removal of the unsupported Anthropic tool-streaming field.
 - The Pi plugin does not use these AI SDK request adapters. It supplies the selected account token to Pi's matching native provider, which owns the required request shape and returns native Pi events.
@@ -193,7 +194,7 @@ The site is served from two Cloudflare custom domains, `subrouter.org` and `www.
 - `cli/src/router.test.ts` covers rotation order, cooldown recording, non-rotate errors passing through, exhaustion errors.
 - `opencode/src/opencode-e2e.test.ts` boots a real `opencode serve` (devDep `opencode-ai`) with fake endpoints and asserts a 429 provider is cycled to the fallback through the whole pipeline. It loads `opencode/dist/provider.js`, so run `pnpm build` before tests.
 - `pi/src/pi-e2e.test.ts` loads `pi/dist/index.js` through Pi's real `ResourceLoader`, uses in-memory Pi stores and local HTTP endpoints, and covers account rotation, cross-provider fallback, non-rotate errors, and partial-stream safety.
-- Tests use temp `SUBROUTER_HOME` dirs; never touch the real `~/.subrouter`.
+- Tests use temp `SUBROUTER_HOME` dirs; never touch the real `~/.subrouter`. `store.ts` throws if Vitest would resolve to the real home. Do not `delete process.env.SUBROUTER_HOME` in `afterEach`; a late write then hits `~/.subrouter`.
 
 ```bash
 pnpm install

@@ -38,7 +38,6 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  delete process.env.SUBROUTER_HOME
   delete process.env.SUBROUTER_OPENAI_ISSUER_URL
   delete process.env.SUBROUTER_MODELS_DEV_URL
   for (const server of openServers.splice(0)) {

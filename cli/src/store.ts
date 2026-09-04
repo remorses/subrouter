@@ -55,8 +55,14 @@ export class StoreError extends errore.createTaggedError({
 // --- Paths ---
 
 export function subrouterHome() {
-  if (process.env.SUBROUTER_HOME) return process.env.SUBROUTER_HOME
-  return path.join(os.homedir(), '.subrouter')
+  const home = process.env.SUBROUTER_HOME || path.join(os.homedir(), '.subrouter')
+  if (
+    process.env.VITEST &&
+    path.resolve(home) === path.resolve(path.join(os.homedir(), '.subrouter'))
+  ) {
+    throw new StoreError({ reason: 'SUBROUTER_HOME must be a temp directory in tests' })
+  }
+  return home
 }
 
 export function configFilePath() {
