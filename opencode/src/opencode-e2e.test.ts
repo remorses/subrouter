@@ -27,6 +27,7 @@ import {
   addAccount,
   clearCooldowns,
   markCooldown,
+  savePreset,
 } from '@subrouter/cli'
 import { addSubrouterHeaders } from './provider.ts'
 
@@ -121,6 +122,7 @@ let projectDir: string
 let anthropicMock: MockServer
 let modelsDevMock: MockServer
 let zenMock: MockServer
+let openaiMock: MockServer
 let zenRespond: MockHandler
 let defaultZenRespond: MockHandler
 let server: { url: string; close: () => void }
@@ -184,6 +186,52 @@ beforeAll(async () => {
   zenRespond = defaultZenRespond
   zenMock = await startMockServer((request, response) => zenRespond(request, response))
 
+  openaiMock = await startMockServer((_request, res) => {
+    const text = 'hello from openai'
+    res.writeHead(200, { 'content-type': 'text/event-stream' })
+    for (const event of [
+      {
+        type: 'response.created',
+        response: { id: 'resp-1', created_at: 1, model: 'gpt-5.5', service_tier: null },
+      },
+      {
+        type: 'response.output_item.added',
+        output_index: 0,
+        item: { type: 'message', id: 'msg-1', role: 'assistant', status: 'in_progress', content: [] },
+      },
+      { type: 'response.content_part.added', part: { type: 'output_text', text: '' } },
+      { type: 'response.output_text.delta', item_id: 'msg-1', delta: text },
+      {
+        type: 'response.output_item.done',
+        output_index: 0,
+        item: {
+          type: 'message',
+          id: 'msg-1',
+          role: 'assistant',
+          status: 'completed',
+          content: [{ type: 'output_text', text }],
+        },
+      },
+      {
+        type: 'response.completed',
+        response: {
+          id: 'resp-1',
+          status: 'completed',
+          usage: {
+            input_tokens: 5,
+            output_tokens: 3,
+            total_tokens: 8,
+            input_tokens_details: { cached_tokens: 0 },
+          },
+        },
+      },
+    ]) {
+      res.write(sseChunk(event))
+    }
+    res.write('data: [DONE]\n\n')
+    res.end()
+  })
+
   modelsDevMock = await startMockServer((_request, res) => {
     const emptyProvider = { models: {} }
     const pdfModel = (id: string) => ({
@@ -196,7 +244,7 @@ beforeAll(async () => {
     res.end(
       JSON.stringify({
         anthropic: { models: { 'claude-opus-4-6': pdfModel('claude-opus-4-6') } },
-        openai: emptyProvider,
+        openai: { models: { 'gpt-5.5': pdfModel('gpt-5.5') } },
         xai: emptyProvider,
         'opencode-go': { models: { 'grok-4.6': pdfModel('grok-4.6') } },
         'github-copilot': emptyProvider,
@@ -218,6 +266,7 @@ beforeAll(async () => {
     SUBROUTER_ANTHROPIC_BASE_URL: `${anthropicMock.url}/v1`,
     SUBROUTER_MODELS_DEV_URL: modelsDevMock.url,
     SUBROUTER_OPENCODE_GO_BASE_URL: `${zenMock.url}/v1`,
+    SUBROUTER_OPENAI_BASE_URL: openaiMock.url,
     // Isolate opencode from the user's real global config and auth
     XDG_CONFIG_HOME: path.join(home, 'xdg-config'),
     XDG_DATA_HOME: path.join(home, 'xdg-data'),
@@ -244,6 +293,23 @@ beforeAll(async () => {
     provider: 'opencode-go',
     account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
   })
+  await addAccount({
+    provider: 'openai',
+    account: {
+      type: 'oauth',
+      refresh: 'openai-refresh',
+      access: 'openai-access',
+      expires: Date.now() + 1_000_000_000,
+      email: 'o@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await savePreset({
+    name: 'default',
+    models: ['anthropic/claude-opus-4-6', 'opencode-go/grok-4.6'],
+  })
+  await savePreset({ name: 'openai-only', models: ['openai/gpt-5.5'] })
 
   const providerEntry = pathToFileURL(
     path.join(import.meta.dirname, '..', 'dist', 'provider.js'),
@@ -286,6 +352,7 @@ afterAll(async () => {
   await anthropicMock?.close()
   await modelsDevMock?.close()
   await zenMock?.close()
+  await openaiMock?.close()
   for (const [key, value] of Object.entries(savedEnv)) {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
@@ -644,5 +711,40 @@ describe('opencode + subrouter provider', () => {
     })
     expect(anthropicMock.requests).toHaveLength(anthropicBefore + 1)
     expect(fallbackCalls).toBe(3)
+  }, 120_000)
+
+  test('openai live model advertises apply_patch and not edit or write', async () => {
+    const client = createOpencodeClient({ baseUrl: server.url })
+    const session = await client.session.create({
+      query: { directory: projectDir },
+      body: { title: 'subrouter apply_patch' },
+    })
+    expect(session.data).toBeTruthy()
+
+    const result = await client.session.prompt({
+      path: { id: session.data!.id },
+      query: { directory: projectDir },
+      body: {
+        model: { providerID: 'subrouter', modelID: 'openai-only' },
+        parts: [{ type: 'text', text: 'say hi' }],
+      },
+    })
+    const texts = (result.data?.parts ?? [])
+      .filter((part) => part.type === 'text')
+      .map((part) => part.text)
+      .join('\n')
+    expect(texts).toContain('hello from openai')
+    expect(openaiMock.requests.length).toBeGreaterThan(0)
+
+    const raw = openaiMock.requests.at(-1)!.body
+    const body = JSON.parse(raw) as {
+      tools?: Array<{ name?: string; type?: string; function?: { name?: string } }>
+    }
+    const names = (body.tools ?? []).map((tool) => tool.name ?? tool.function?.name)
+    expect(names).toContain('apply_patch')
+    expect(names).not.toContain('edit')
+    expect(names).not.toContain('write')
+    expect(raw).toContain('apply_patch')
+    expect(raw.includes('"name":"edit"') || raw.includes('"name": "edit"')).toBe(false)
   }, 120_000)
 })

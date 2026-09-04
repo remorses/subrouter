@@ -7,7 +7,8 @@
  * model: pick `subrouter/default` (or any preset created with
  * `subrouter preset create`) in opencode. Provider id stays `subrouter`; the
  * visible name is `subrouter.org`. Context limits follow the first live
- * candidate. Input modalities cover every usable candidate so the
+ * candidate. GPT candidates spoof a `gpt-*` api id so OpenCode prefers
+ * apply_patch over edit/write. Input modalities cover every usable candidate so the
  * router can select a compatible subscription for each prompt. Tool
  * follow-ups stay on the selected route until the session becomes idle.
  *
@@ -34,6 +35,7 @@ import {
   PROVIDER_DISPLAY_NAME,
   PROVIDER_ID,
   PROVIDER_IDS,
+  clearLiveRoute,
   resolveCandidates,
   resolvePresetModels,
   RouteAffinity,
@@ -41,7 +43,12 @@ import {
   type StoredAccount,
   type SubrouterLog,
 } from '@subrouter/cli'
-import { addSubrouterHeaders, revealRoutedModel } from './provider.ts'
+import {
+  addSubrouterHeaders,
+  applyPatchApiId,
+  revealRoutedModel,
+  shouldUseApplyPatch,
+} from './provider.ts'
 
 function providerEntryUrl() {
   const isDev = import.meta.url.endsWith('.ts')
@@ -105,56 +112,84 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
       })
       const names = new Set([DEFAULT_PRESET_NAME, ...Object.keys(presets.presets)])
       const catalog = await loadModelsDevCatalog({ log })
+      const takenApiIds = new Set<string>()
+      const presetByApiId: Record<string, string> = {}
+      const resolved = await Promise.all(
+        [...names].map(async (name) => {
+          const presetModels = await resolvePresetModels(name)
+          const candidates =
+            presetModels instanceof Error
+              ? []
+              : (await resolveCandidates({ presetModels })).candidates
+          const candidate = candidates[0]
+          const limit = candidate
+            ? modelsDevLimit({
+                provider: candidate.provider,
+                modelId: candidate.modelId,
+                catalog,
+              })
+            : null
+          const input = new Set<'text' | 'audio' | 'image' | 'video' | 'pdf'>(['text'])
+          let attachment = false
+          for (const current of candidates) {
+            const model = modelsDevModel({
+              provider: current.provider,
+              modelId: current.modelId,
+              catalog,
+            })
+            const modalities = modelsDevInputModalities({
+              provider: current.provider,
+              modelId: current.modelId,
+              catalog,
+            })
+            if (!model || !modalities) continue
+            attachment ||= model.attachment && modalities.some((modality) => modality !== 'text')
+            for (const modality of modalities) input.add(modality)
+          }
+          return { name, candidate, attachment, input, limit }
+        }),
+      )
       const models = Object.fromEntries(
-        await Promise.all(
-          [...names].map(async (name) => {
-            const presetModels = await resolvePresetModels(name)
-            const candidates =
-              presetModels instanceof Error
-                ? []
-                : (await resolveCandidates({ presetModels })).candidates
-            const candidate = candidates[0]
-            const limit = candidate
-              ? modelsDevLimit({
-                  provider: candidate.provider,
+        resolved.map(({ name, candidate, attachment, input, limit }) => {
+          const apiId =
+            candidate && shouldUseApplyPatch(candidate.modelId)
+              ? applyPatchApiId({
+                  preset: name,
                   modelId: candidate.modelId,
-                  catalog,
+                  taken: takenApiIds,
                 })
-              : null
-            const input = new Set<'text' | 'audio' | 'image' | 'video' | 'pdf'>(['text'])
-            let attachment = false
-            for (const current of candidates) {
-              const model = modelsDevModel({
-                provider: current.provider,
-                modelId: current.modelId,
-                catalog,
-              })
-              const modalities = modelsDevInputModalities({
-                provider: current.provider,
-                modelId: current.modelId,
-                catalog,
-              })
-              if (!model || !modalities) continue
-              attachment ||= model.attachment && modalities.some((modality) => modality !== 'text')
-              for (const modality of modalities) input.add(modality)
+              : undefined
+          if (apiId) {
+            takenApiIds.add(apiId)
+            presetByApiId[apiId] = name
+          }
+          const model: {
+            name: string
+            id?: string
+            tool_call: true
+            attachment: boolean
+            reasoning: false
+            modalities: {
+              input: Array<'text' | 'audio' | 'image' | 'video' | 'pdf'>
+              output: Array<'text'>
             }
-            return [
-              name,
-              {
-                name,
-                tool_call: true,
-                attachment,
-                reasoning: false,
-                modalities: {
-                  input: [...input],
-                  output: ['text'] satisfies Array<'text'>,
-                },
-                cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-                limit: limit ?? { context: 200_000, output: 64_000 },
-              },
-            ]
-          }),
-        ),
+            cost: { input: number; output: number; cache_read: number; cache_write: number }
+            limit: { context: number; input?: number; output: number }
+          } = {
+            name,
+            tool_call: true,
+            attachment,
+            reasoning: false,
+            modalities: {
+              input: [...input],
+              output: ['text'],
+            },
+            cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
+            limit: limit ?? { context: 200_000, output: 64_000 },
+          }
+          if (apiId) model.id = apiId
+          return [name, model]
+        }),
       )
       config.provider = {
         ...config.provider,
@@ -162,7 +197,7 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
           name: PROVIDER_DISPLAY_NAME,
           npm: providerEntryUrl(),
           models,
-          options: { affinity, log, onCooldownFallback },
+          options: { affinity, log, onCooldownFallback, presetByApiId },
         },
       }
     },
@@ -173,6 +208,7 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
         if (messageID) affinity.clear(messageID)
         activeMessages.delete(sessionID)
         deliveredNotices.delete(sessionID)
+        await clearLiveRoute(sessionID)
         return
       }
       if (event.type !== 'session.idle') return
@@ -180,19 +216,18 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
       const messageID = activeMessages.get(sessionID)
       if (messageID) affinity.clear(messageID)
       activeMessages.delete(sessionID)
+      await clearLiveRoute(sessionID)
     },
     'chat.headers': async (input, output) => {
       const activeMessage = activeMessages.get(input.sessionID) ?? input.message.id
       const affinityKey = addSubrouterHeaders({ input, output, affinityKey: activeMessage })
       if (affinityKey) activeMessages.set(input.sessionID, affinityKey)
     },
-    // This runs before chat.headers, so a turn's first call has no affinity key.
     'experimental.chat.system.transform': async (input, output) => {
       await revealRoutedModel({
         providerID: input.model.providerID,
         preset: input.model.id,
-        affinity,
-        affinityKey: input.sessionID ? activeMessages.get(input.sessionID) : undefined,
+        sessionID: input.sessionID,
         system: output.system,
       })
     },

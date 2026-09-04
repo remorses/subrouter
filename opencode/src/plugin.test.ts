@@ -14,9 +14,17 @@ import {
   PROVIDER_DISPLAY_NAME,
   PROVIDER_IDS,
   savePreset,
+  setLiveRoute,
 } from '@subrouter/cli'
 import { subrouterAuthPlugin, subrouterPlugin } from './index.ts'
-import { revealRoutedModel, rewritePoweredByModelLine } from './provider.ts'
+import {
+  appendApplyPatchConstraint,
+  applyPatchApiId,
+  applyPatchConstraint,
+  revealRoutedModel,
+  rewritePoweredByModelLine,
+  shouldUseApplyPatch,
+} from './provider.ts'
 
 const execFile = util.promisify(childProcess.execFile)
 let home: string
@@ -444,6 +452,87 @@ test('Anthropic-compatible coding plans do not advertise video input', async () 
   })
 })
 
+test('OpenCode apply_patch matcher follows gpt- and skips gpt-4 and gpt-oss', () => {
+  expect(shouldUseApplyPatch('gpt-5.5')).toBe(true)
+  expect(shouldUseApplyPatch('gpt-5.4')).toBe(true)
+  expect(shouldUseApplyPatch('gpt-5.3-codex')).toBe(true)
+  expect(shouldUseApplyPatch('gpt-4.1')).toBe(false)
+  expect(shouldUseApplyPatch('gpt-oss-120b')).toBe(false)
+  expect(shouldUseApplyPatch('claude-opus-4-6')).toBe(false)
+})
+
+test('apply_patch api ids stay unique across presets that share a model', () => {
+  const taken = new Set<string>()
+  const first = applyPatchApiId({ preset: 'codex-a', modelId: 'gpt-5.5', taken })
+  taken.add(first)
+  const second = applyPatchApiId({ preset: 'codex-b', modelId: 'gpt-5.5', taken })
+  expect(first).toBe('gpt-5.5')
+  expect(second).toBe('gpt-5.5:codex-b')
+  expect(shouldUseApplyPatch(second)).toBe(true)
+})
+
+test('appendApplyPatchConstraint adds the OpenCode GPT line once', () => {
+  const system = ['You are powered by the model named gpt-5.5.']
+  appendApplyPatchConstraint({ system, modelId: 'gpt-5.5' })
+  appendApplyPatchConstraint({ system, modelId: 'gpt-5.5' })
+  expect(system).toEqual(['You are powered by the model named gpt-5.5.', applyPatchConstraint('gpt-5.5')])
+})
+
+test('appendApplyPatchConstraint skips non-GPT models', () => {
+  const system = ['You are powered by the model named claude-opus-4-6.']
+  appendApplyPatchConstraint({ system, modelId: 'claude-opus-4-6' })
+  expect(system).toEqual(['You are powered by the model named claude-opus-4-6.'])
+})
+
+test('openai live candidate spoofs a gpt api id so OpenCode prefers apply_patch', async () => {
+  await addAccount({
+    provider: 'anthropic',
+    account: {
+      type: 'oauth',
+      refresh: 'refresh-1',
+      access: 'access-1',
+      expires: Date.now() + 60_000,
+      email: 'a@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await addAccount({
+    provider: 'openai',
+    account: {
+      type: 'oauth',
+      refresh: 'refresh-o',
+      access: 'access-o',
+      expires: Date.now() + 60_000,
+      email: 'o@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await savePreset({ name: 'default', models: ['anthropic/claude-opus-4-6'] })
+  await savePreset({ name: 'openai-only', models: ['openai/gpt-5.5'] })
+  await savePreset({ name: 'codex-b', models: ['openai/gpt-5.5'] })
+
+  const hooks = await subrouterPlugin(pluginInput)
+  const config: Config = {}
+  await hooks.config?.(config)
+
+  expect(config.provider?.subrouter?.models?.work).toBeUndefined()
+  expect(config.provider?.subrouter?.models?.['openai-only']).toMatchObject({
+    name: 'openai-only',
+    id: 'gpt-5.5',
+  })
+  expect(config.provider?.subrouter?.models?.['codex-b']).toMatchObject({
+    name: 'codex-b',
+    id: 'gpt-5.5:codex-b',
+  })
+  expect(config.provider?.subrouter?.models?.default?.id).toBeUndefined()
+  expect(config.provider?.subrouter?.options?.presetByApiId).toEqual({
+    'gpt-5.5': 'openai-only',
+    'gpt-5.5:codex-b': 'codex-b',
+  })
+})
+
 test('rewrites the OpenCode powered-by line to the routed candidate', () => {
   const system = [
     'You are powered by the model named build. The exact model ID is subrouter/build\n<env>\n  Working directory: /tmp\n</env>',
@@ -480,6 +569,84 @@ test('system transform rewrites the powered-by line to the live candidate', asyn
   expect(system[0]).toContain(`You are powered by the model named ${modelId}.`)
   expect(system[0]).toContain(`The exact model ID is anthropic/${modelId}`)
   expect(system[0]).not.toContain('subrouter/build')
+})
+
+test('system transform uses the in-flight session route, not the first free preset model', async () => {
+  await addAccount({
+    provider: 'anthropic',
+    account: {
+      type: 'oauth',
+      refresh: 'refresh-1',
+      access: 'access-1',
+      expires: Date.now() + 60_000,
+      email: 'a@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await addAccount({
+    provider: 'opencode-go',
+    account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+  })
+  await savePreset({
+    name: 'default',
+    models: ['anthropic/claude-fake', 'opencode-go/fake-model'],
+  })
+  await setLiveRoute({
+    sessionID: 'ses_1',
+    preset: 'default',
+    provider: 'opencode-go',
+    modelId: 'fake-model',
+  })
+
+  const system = [
+    'You are powered by the model named default. The exact model ID is subrouter/default',
+  ]
+  await revealRoutedModel({
+    providerID: 'subrouter',
+    preset: 'default',
+    sessionID: 'ses_1',
+    system,
+  })
+
+  expect(system[0]).toContain('You are powered by the model named fake-model.')
+  expect(system[0]).toContain('The exact model ID is opencode-go/fake-model')
+  expect(system[0]).not.toContain('claude-fake')
+})
+
+test('system transform appends the apply_patch constraint for a live GPT route', async () => {
+  await addAccount({
+    provider: 'openai',
+    account: {
+      type: 'oauth',
+      refresh: 'refresh-o',
+      access: 'access-o',
+      expires: Date.now() + 60_000,
+      email: 'o@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await savePreset({ name: 'openai-only', models: ['openai/gpt-5.5'] })
+  await setLiveRoute({
+    sessionID: 'ses_gpt',
+    preset: 'openai-only',
+    provider: 'openai',
+    modelId: 'gpt-5.5',
+  })
+
+  const system = [
+    'You are powered by the model named openai-only. The exact model ID is subrouter/openai-only',
+  ]
+  await revealRoutedModel({
+    providerID: 'subrouter',
+    preset: 'openai-only',
+    sessionID: 'ses_gpt',
+    system,
+  })
+
+  expect(system[0]).toContain('You are powered by the model named gpt-5.5.')
+  expect(system).toContain(applyPatchConstraint('gpt-5.5'))
 })
 
 test('system transform leaves other providers unchanged', async () => {

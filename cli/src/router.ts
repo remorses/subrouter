@@ -789,6 +789,8 @@ function candidateCallOptions({
 /**
  * AI SDK provider factory. OpenCode imports the provider module and calls the
  * first export starting with `create`, then `sdk.languageModel(modelId)`.
+ * GPT presets spoof a `gpt-*` api id so OpenCode prefers apply_patch;
+ * `presetByApiId` maps that id back to the preset name.
  */
 export function createSubrouter(
   options: {
@@ -796,11 +798,12 @@ export function createSubrouter(
     onEvent?: (event: RouterEvent) => void
     onCooldownFallback?: (notice: CooldownFallbackNotice) => void | Promise<void>
     log?: SubrouterLog
+    presetByApiId?: Record<string, string>
   } = {},
 ) {
-  const model = (preset: string) =>
+  const model = (apiId: string) =>
     new RouterModel({
-      preset,
+      preset: options.presetByApiId?.[apiId] ?? apiId,
       affinity: options.affinity,
       onEvent: options.onEvent,
       onCooldownFallback: options.onCooldownFallback,

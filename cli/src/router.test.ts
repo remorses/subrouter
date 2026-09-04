@@ -393,6 +393,25 @@ describe('RouterModel failover', () => {
     expect(otherLogs).toEqual([])
   })
 
+  test('createSubrouter maps a spoofed gpt api id back to the preset', async () => {
+    const opencodeMock = await startMockServer(() => chatCompletionOk('hello from fallback'))
+    servers = [opencodeMock]
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'openai-only', models: ['opencode-go/fake-model'] })
+
+    const sdk = createSubrouter({
+      presetByApiId: { 'gpt-5.5': 'openai-only' },
+    })
+    const result = await sdk.languageModel('gpt-5.5').doGenerate(callOptions)
+    const texts = result.content.filter((part) => part.type === 'text').map((part) => part.text)
+    expect(texts).toEqual(['hello from fallback'])
+  })
+
   test('persists a short retry-after as the account cooldown', async () => {
     const anthropicMock = await startMockServer(() => ({
       ...anthropic429,
