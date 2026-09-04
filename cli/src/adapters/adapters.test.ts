@@ -103,10 +103,9 @@ describe('classifyFailure', () => {
     ).toEqual({ rotate: true, cooldownMs: 5 * 60 * 1000 })
   })
 
-  test('402 balance exhausted gets a long cooldown', () => {
+  test('402 balance exhausted cools down for 10 minutes', () => {
     const action = classifyFailure({ statusCode: 402, body: 'Grok Build usage balance exhausted', message: 'exhausted' })
-    expect(action?.rotate).toBe(true)
-    expect(action!.cooldownMs).toBeGreaterThanOrEqual(6 * 60 * 60 * 1000)
+    expect(action).toEqual({ rotate: true, cooldownMs: 10 * 60 * 1000 })
   })
 
   test('401/403 rotate, including Grok spending limits, while 400 does not', () => {
@@ -143,9 +142,38 @@ describe('classifyFailure', () => {
     expect(classifyFailure({ message: 'Rate limit reached for account' })?.rotate).toBe(true)
     expect(classifyFailure({ message: 'refresh token expired, re-login required' })?.rotate).toBe(true)
     const quota = classifyFailure({ message: 'Your 1-week quota has been exhausted' })
-    expect(quota?.rotate).toBe(true)
-    expect(quota!.cooldownMs).toBeGreaterThanOrEqual(6 * 60 * 60 * 1000)
+    expect(quota).toEqual({ rotate: true, cooldownMs: 10 * 60 * 1000 })
     expect(classifyFailure({ message: 'something else' })).toBeNull()
+  })
+
+  test('overloaded and capacity errors cool down for 1 minute', () => {
+    expect(
+      classifyFailure({
+        message:
+          'The model is currently at capacity due to high demand. Please try again in a few minutes, or use a higher service tier for priority processing',
+      }),
+    ).toEqual({ rotate: true, cooldownMs: 60_000 })
+    expect(classifyFailure({ message: 'Overloaded' })).toEqual({ rotate: true, cooldownMs: 60_000 })
+    expect(classifyFailure({ statusCode: 529, message: 'overloaded_error' })).toEqual({
+      rotate: true,
+      cooldownMs: 60_000,
+    })
+    expect(
+      classifyFailure({
+        statusCode: 429,
+        message: 'The engine is currently overloaded. Please try again later.',
+      }),
+    ).toEqual({ rotate: true, cooldownMs: 60_000 })
+  })
+
+  test('overloaded errors still honor retry-after', () => {
+    expect(
+      classifyFailure({
+        statusCode: 429,
+        headers: { 'retry-after': '15' },
+        message: 'currently at capacity',
+      }),
+    ).toEqual({ rotate: true, cooldownMs: 15_000 })
   })
 })
 

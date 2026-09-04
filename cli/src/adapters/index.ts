@@ -481,7 +481,8 @@ export type FailureDetails = {
 }
 
 const DEFAULT_COOLDOWN_MS = 5 * 60 * 1000
-const EXHAUSTED_COOLDOWN_MS = 6 * 60 * 60 * 1000
+const OVERLOADED_COOLDOWN_MS = 60 * 1000
+const EXHAUSTED_COOLDOWN_MS = 10 * 60 * 1000
 
 function rotateWorthyText(text: string) {
   const haystack = text.toLowerCase()
@@ -511,6 +512,11 @@ function quotaExhaustedText(text: string) {
     haystack.includes('quota exceeded') ||
     haystack.includes('insufficient_quota')
   )
+}
+
+function overloadedText(text: string) {
+  const haystack = text.toLowerCase()
+  return haystack.includes('overloaded') || haystack.includes('currently at capacity')
 }
 
 function headerValue(headers: Record<string, string> | undefined, name: string) {
@@ -548,9 +554,9 @@ function rotateCooldownMs(headers: Record<string, string> | undefined) {
 
 /**
  * Decide whether an error from a model call should trigger failover.
- * 402 means the subscription balance is exhausted (xAI Grok Build), which
- * gets a long cooldown. 429/401/403 and usage-limit texts get a short one,
- * or the provider's retry-after / retry-after-ms when that header is present.
+ * 402 / quota-exhausted cools for 10 minutes. Overloaded / at-capacity cools
+ * for 1 minute. 429/401/403 and usage-limit texts use retry-after when present,
+ * otherwise 5 minutes.
  */
 export function failureDetailsFromError(error: Error): FailureDetails {
   if (APICallError.isInstance(error)) {
@@ -565,13 +571,17 @@ export function failureDetailsFromError(error: Error): FailureDetails {
 }
 
 export function classifyFailure({ statusCode: status, headers, message, body = '' }: FailureDetails): FailureAction | null {
-  if (quotaExhaustedText(`${message} ${body}`)) {
+  const text = `${message} ${body}`
+  if (quotaExhaustedText(text)) {
     return { rotate: true, cooldownMs: EXHAUSTED_COOLDOWN_MS }
   }
   if (status === 402) return { rotate: true, cooldownMs: EXHAUSTED_COOLDOWN_MS }
+  if (overloadedText(text)) {
+    return { rotate: true, cooldownMs: retryAfterMs(headers) ?? OVERLOADED_COOLDOWN_MS }
+  }
   if (status === 429) return { rotate: true, cooldownMs: rotateCooldownMs(headers) }
   if (status === 401 || status === 403) return { rotate: true, cooldownMs: rotateCooldownMs(headers) }
-  if (rotateWorthyText(`${message} ${body}`)) {
+  if (rotateWorthyText(text)) {
     return { rotate: true, cooldownMs: rotateCooldownMs(headers) }
   }
   return null

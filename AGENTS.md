@@ -118,7 +118,7 @@ Users never hand-edit config files. All state is created through the CLI (`subro
 
 ## Cooldowns are global machine scope
 
-Rate-limit state lives in `~/.subrouter/config.json`, shared by every process and harness on the machine, so a rate-limited subscription is not retried per-session. Never shorten an existing cooldown. 429 and usage-limit errors honor `retry-after` / `retry-after-ms` when the provider sends them, including `0`. Otherwise 5 minutes. 402 (balance exhausted) cools down 6 hours.
+Rate-limit state lives in `~/.subrouter/config.json`, shared by every process and harness on the machine, so a rate-limited subscription is not retried per-session. Never shorten an existing cooldown. 429 and usage-limit errors honor `retry-after` / `retry-after-ms` when the provider sends them, including `0`. Otherwise 5 minutes. Overloaded / at-capacity errors cool down 1 minute. 402 (balance exhausted) cools down 10 minutes.
 
 Pi's native OpenAI-compatible adapter does not call `onResponse` on HTTP errors. A 429 therefore reaches Subrouter as error text only, without retry headers. OpenCode goes through AI SDK `APICallError.responseHeaders`, which does carry them.
 

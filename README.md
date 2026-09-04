@@ -120,10 +120,11 @@ Accounts live in `~/.subrouter/config.json`. Log in **multiple times to the same
 
 Cooldowns are **global per machine** (`~/.subrouter/config.json`). Once an account is rate limited, every session and every harness skips it until the cooldown expires.
 
-| Response                | Cooldown                                                           |
-| ----------------------- | ------------------------------------------------------------------ |
-| `429` rate limited      | `retry-after` / `retry-after-ms` when present, otherwise 5 minutes |
-| `402` balance exhausted | 6 hours                                                            |
+| Response                 | Cooldown                                                           |
+| ------------------------ | ------------------------------------------------------------------ |
+| `429` rate limited       | `retry-after` / `retry-after-ms` when present, otherwise 5 minutes |
+| overloaded / at capacity | `retry-after` / `retry-after-ms` when present, otherwise 1 minute  |
+| `402` / quota exhausted  | 10 minutes                                                         |
 
 ### Presets
 
