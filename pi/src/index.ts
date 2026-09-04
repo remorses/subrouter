@@ -41,6 +41,8 @@ import {
   resolveCandidates,
   resolvePresetModels,
   RouteAffinity,
+  clearLiveRoute,
+  setLiveRoute,
   updateAccount,
   type Candidate,
   type ProviderId,
@@ -404,6 +406,14 @@ function streamPreset({
             ? activeRouteKeys.get(options.sessionId) ?? null
             : null
           if (activeRouteKey === routeKey) affinity.select(routeKey, candidate)
+          if (options?.sessionId) {
+            await setLiveRoute({
+              sessionID: options.sessionId,
+              preset: model.id,
+              provider: candidate.provider,
+              modelId: candidate.modelId,
+            })
+          }
           model.name = formatCandidateRef(candidate)
           if (start) stream.push(start)
         }
@@ -546,6 +556,7 @@ export default async function subrouterPiExtension(pi: ExtensionAPI) {
     const routeKey = activeRouteKeys.get(sessionId)
     if (routeKey) affinity.clear(routeKey)
     activeRouteKeys.delete(sessionId)
+    void clearLiveRoute(sessionId)
   })
   // The CLI bundle has its own pi-ai copy. This plugin's Codex sockets live
   // here, so CLI session.dispose() cannot close them. Close on shutdown.
@@ -554,6 +565,7 @@ export default async function subrouterPiExtension(pi: ExtensionAPI) {
     const routeKey = activeRouteKeys.get(sessionId)
     if (routeKey) affinity.clear(routeKey)
     activeRouteKeys.delete(sessionId)
+    void clearLiveRoute(sessionId)
     closeOpenAICodexWebSocketSessions()
   })
 }

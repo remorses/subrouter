@@ -49,6 +49,8 @@ import {
   loadPresets,
   loadState,
   markCooldown,
+  getLiveRoute,
+  setLiveRoute,
   updateAccount,
   accountLabel,
   cooldownKey,
@@ -357,6 +359,25 @@ export async function resolveActiveCandidate(preset: string) {
   return candidates[0] ?? null
 }
 
+/** In-flight session route if one exists, else the first cooldown-aware candidate. */
+export async function resolveLiveModel({
+  preset,
+  sessionID,
+}: {
+  preset: string
+  sessionID?: string
+}) {
+  if (sessionID) {
+    const live = await getLiveRoute(sessionID)
+    if (live && live.preset === preset) {
+      return { provider: live.provider, modelId: live.modelId }
+    }
+  }
+  const candidate = await resolveActiveCandidate(preset)
+  if (!candidate) return null
+  return { provider: candidate.provider, modelId: candidate.modelId }
+}
+
 type Attempt<T> = { ok: true; value: T } | { ok: false; error: Error }
 
 function messageFromUnknownError<T>(value: T) {
@@ -556,6 +577,15 @@ export class RouterModel implements LanguageModelV3 {
         : result
       if (inspected.ok) {
         this.affinity?.select(affinityKey, candidate)
+        const sessionID = headers.get(OPENAI_WEBSOCKET_SESSION_HEADER)
+        if (sessionID && !headers.get(OPENAI_WEBSOCKET_TITLE_HEADER)) {
+          await setLiveRoute({
+            sessionID,
+            preset: this.modelId,
+            provider: candidate.provider,
+            modelId: candidate.modelId,
+          })
+        }
         return inspected.value
       }
 

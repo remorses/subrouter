@@ -6,6 +6,8 @@
  * and a lock directory for cross-process safety. Cooldown state is global on
  * purpose: when a subscription hits a rate limit, every process and harness
  * on the machine should stop retrying it until the cooldown expires.
+ * In-flight session routes are stored here too, so /model and the OpenCode
+ * system prompt can read the live provider/model from another process.
  * 0.3.0 used accounts.json, presets.json, state.json, and login-*.json.
  * Those files are read until the next write, then replaced by config.json.
  * Provider id `opencode` is copied to `opencode-go` on that load.
@@ -193,6 +195,22 @@ function normalizeCooldowns(input: Partial<ConfigFile['cooldowns']> | undefined,
   return cooldowns
 }
 
+function normalizeRoutes(input: Partial<ConfigFile['routes']> | undefined): ConfigFile['routes'] {
+  const routes: ConfigFile['routes'] = {}
+  for (const [sessionID, route] of Object.entries(input ?? {})) {
+    if (!route || typeof route !== 'object') continue
+    if (typeof route.preset !== 'string' || !route.preset) continue
+    if (!isProviderId(route.provider)) continue
+    if (typeof route.modelId !== 'string' || !route.modelId) continue
+    routes[sessionID] = {
+      preset: route.preset,
+      provider: route.provider,
+      modelId: route.modelId,
+    }
+  }
+  return routes
+}
+
 function normalizeLogins(input: Partial<ConfigFile['logins']> | undefined): ConfigFile['logins'] {
   const logins: ConfigFile['logins'] = {}
   for (const id of PROVIDER_IDS) {
@@ -264,6 +282,7 @@ function configFromRaw(raw: Partial<ConfigFile> | null): ConfigFile {
     providers: normalizeProviders(takeOpencodeGo(raw?.providers)),
     presets: normalizePresets(remapOpencodePresets(raw?.presets)),
     cooldowns: normalizeCooldowns(remapOpencodeCooldowns(raw?.cooldowns)),
+    routes: normalizeRoutes(raw?.routes),
     logins: normalizeLogins(takeOpencodeGo(raw?.logins)),
   }
 }
@@ -295,6 +314,7 @@ async function saveConfigUnlocked(file: ConfigFile) {
     providers: file.providers,
     presets: file.presets,
     cooldowns: file.cooldowns,
+    routes: file.routes,
     logins: file.logins,
   })
   await removeLegacyStateFiles()
@@ -521,6 +541,47 @@ export async function clearCooldowns() {
   await withStoreLock(async () => {
     const config = await loadConfigUnlocked()
     config.cooldowns = {}
+    await saveConfigUnlocked(config)
+  })
+}
+
+export async function getLiveRoute(sessionID: string) {
+  const config = await loadConfigUnlocked()
+  return config.routes[sessionID] ?? null
+}
+
+export async function setLiveRoute({
+  sessionID,
+  preset,
+  provider,
+  modelId,
+}: {
+  sessionID: string
+  preset: string
+  provider: ProviderId
+  modelId: string
+}) {
+  await withStoreLock(async () => {
+    const config = await loadConfigUnlocked()
+    const existing = config.routes[sessionID]
+    if (
+      existing &&
+      existing.preset === preset &&
+      existing.provider === provider &&
+      existing.modelId === modelId
+    ) {
+      return
+    }
+    config.routes[sessionID] = { preset, provider, modelId }
+    await saveConfigUnlocked(config)
+  })
+}
+
+export async function clearLiveRoute(sessionID: string) {
+  await withStoreLock(async () => {
+    const config = await loadConfigUnlocked()
+    if (!config.routes[sessionID]) return
+    delete config.routes[sessionID]
     await saveConfigUnlocked(config)
   })
 }

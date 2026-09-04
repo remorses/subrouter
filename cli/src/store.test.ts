@@ -116,6 +116,7 @@ describe('accounts', () => {
         "providers",
         "presets",
         "cooldowns",
+        "routes",
         "logins",
       ]
     `)

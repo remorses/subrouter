@@ -95,6 +95,18 @@ export const configFileSchema = z
     cooldowns: z
       .record(z.string(), z.number())
       .describe('Map of provider:accountKey to epoch milliseconds until the account is usable again'),
+    routes: z
+      .record(
+        z.string(),
+        z
+          .object({
+            preset: z.string().describe('Subrouter preset that selected this route'),
+            provider: providerIdSchema,
+            modelId: z.string().describe('Underlying model id for the in-flight route'),
+          })
+          .describe('In-flight provider/model for one harness session'),
+      )
+      .describe('Map of session id to the live route until that session goes idle'),
     logins: loginsSchema,
   })
   .describe('~/.subrouter/config.json')

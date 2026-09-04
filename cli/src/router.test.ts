@@ -19,12 +19,23 @@ import {
   requiredInputModalities,
   resolveActiveCandidate,
   resolveCandidates,
+  resolveLiveModel,
   RouteAffinity,
   ROUTE_AFFINITY_HEADER,
   RouterModel,
 } from './router.ts'
 import { parseModelsDevCatalog, type SubrouterLogEntry } from './adapters/index.ts'
-import { addAccount, loadState, markCooldown, savePreset, type StoredAccount } from './store.ts'
+import { OPENAI_WEBSOCKET_SESSION_HEADER } from './adapters/openai-websocket.ts'
+import {
+  addAccount,
+  clearCooldowns,
+  clearLiveRoute,
+  loadState,
+  markCooldown,
+  savePreset,
+  setLiveRoute,
+  type StoredAccount,
+} from './store.ts'
 
 type MockResponse = { status: number; headers?: Record<string, string>; body: string }
 
@@ -631,6 +642,60 @@ describe('RouterModel failover', () => {
 
     const active = await resolveActiveCandidate('test')
     expect(active).toMatchObject({ provider: 'opencode-go', modelId: 'fake-model' })
+  })
+
+  test('resolveLiveModel keeps the in-flight session route after the preferred model is free again', async () => {
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+    await setLiveRoute({
+      sessionID: 'session-1',
+      preset: 'test',
+      provider: 'opencode-go',
+      modelId: 'fake-model',
+    })
+
+    const live = await resolveLiveModel({ preset: 'test', sessionID: 'session-1' })
+    const next = await resolveLiveModel({ preset: 'test' })
+    await clearLiveRoute('session-1')
+    const afterClear = await resolveLiveModel({ preset: 'test', sessionID: 'session-1' })
+
+    expect(live).toMatchObject({ provider: 'opencode-go', modelId: 'fake-model' })
+    expect(next).toMatchObject({ provider: 'anthropic', modelId: 'claude-fake' })
+    expect(afterClear).toMatchObject({ provider: 'anthropic', modelId: 'claude-fake' })
+  })
+
+  test('persists the live session route when a request fails over', async () => {
+    const anthropicMock = await startMockServer(() => anthropic429)
+    const opencodeMock = await startMockServer(() => chatCompletionOk('fallback'))
+    servers = [anthropicMock, opencodeMock]
+    process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    await new RouterModel({ preset: 'test' }).doGenerate({
+      ...callOptions,
+      headers: { [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-1' },
+    })
+    await clearCooldowns()
+
+    expect(await resolveLiveModel({ preset: 'test', sessionID: 'session-1' })).toMatchObject({
+      provider: 'opencode-go',
+      modelId: 'fake-model',
+    })
+    expect(await resolveLiveModel({ preset: 'test' })).toMatchObject({
+      provider: 'anthropic',
+      modelId: 'claude-fake',
+    })
   })
 
   test('reports when a cooldown starts a request on a fallback model', async () => {
