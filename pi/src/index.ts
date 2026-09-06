@@ -25,6 +25,7 @@ import {
   accountLabel,
   adapters,
   AllCandidatesExhaustedError,
+  OPENCODE_GO_SESSION_HEADER,
   classifyFailure,
   DEFAULT_PRESET_NAME,
   emitLog,
@@ -358,12 +359,15 @@ function streamPreset({
         anthropicOAuth && context.systemPrompt
           ? { ...context, systemPrompt: sanitizePiAnthropicSystemPrompt({ text: context.systemPrompt, log }) }
           : context
+      const headers = { ...options?.headers }
+      if (usesBearerHeader) headers.authorization = `Bearer ${apiKey}`
+      if (candidate.provider === 'opencode-go') {
+        headers[OPENCODE_GO_SESSION_HEADER] = options?.sessionId || crypto.randomUUID()
+      }
       const inner = target.provider.streamSimple(target.model, routedContext, {
         ...options,
         apiKey: usesBearerHeader ? undefined : apiKey,
-        headers: usesBearerHeader
-          ? { ...options?.headers, authorization: `Bearer ${apiKey}` }
-          : options?.headers,
+        headers,
         maxRetries: 0,
         transport: options?.transport,
         onResponse: async (received, responseModel) => {

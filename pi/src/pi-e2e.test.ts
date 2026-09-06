@@ -20,7 +20,12 @@ import { WebSocketServer, type WebSocket } from 'ws'
 type LocalServer = {
   server: Server
   url: string
-  requests: Array<{ authorization?: string; body: string; path: string }>
+  requests: Array<{
+    authorization?: string
+    body: string
+    path: string
+    opencodeSession?: string
+  }>
 }
 
 type Responder = (request: LocalServer['requests'][number], response: http.ServerResponse) => void
@@ -83,6 +88,9 @@ async function listen(
         authorization: request.headers.authorization,
         body,
         path: request.url ?? '',
+        opencodeSession: Array.isArray(request.headers['x-opencode-session'])
+          ? request.headers['x-opencode-session'][0]
+          : request.headers['x-opencode-session'],
       }
       requests.push(received)
       respond(received, response)
@@ -470,6 +478,8 @@ describe.sequential('@subrouter/pi', () => {
     expect(anthropicServer.requests).toHaveLength(1)
     expect(openCodeServer.requests).toHaveLength(1)
     expect(openCodeServer.requests[0]?.authorization).toBe('Bearer fake-zen-key')
+    expect(openCodeServer.requests[0]?.opencodeSession).toEqual(expect.any(String))
+    expect(openCodeServer.requests[0]?.opencodeSession?.length).toBeGreaterThan(0)
     expect(Object.keys((await loadState()).cooldowns)).toEqual(['anthropic:anthropic@example.com'])
     await expect(fs.access(path.join(agentDir, 'auth.json'))).rejects.toThrow()
   }, 30_000)

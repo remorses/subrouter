@@ -15,6 +15,7 @@ export {
   modelsDevModel,
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
+  OPENCODE_GO_SESSION_HEADER,
   type FailureDetails,
   type ProviderAdapter,
   type LoginArgs,

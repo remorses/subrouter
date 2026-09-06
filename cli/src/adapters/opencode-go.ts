@@ -6,13 +6,16 @@
  * pay-as-you-go, a different product with a different catalog.
  *
  * Login stores an API key from https://opencode.ai/auth. Requests inject it as a
- * bearer token.
+ * bearer token. OpenCode Go also requires `x-opencode-session` (stable per
+ * conversation); RouterModel / Pi set that from the harness session id.
  */
 
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible'
 import * as errore from 'errore'
 import type { StoredAccount } from '../store.ts'
 import { resolveBaseUrl, type LoginSession, type ProviderAdapter } from './index.ts'
+
+export const OPENCODE_GO_SESSION_HEADER = 'x-opencode-session'
 
 export class OpencodeGoAuthError extends errore.createTaggedError({
   name: 'OpencodeGoAuthError',

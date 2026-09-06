@@ -29,6 +29,7 @@ import type {
 } from '@ai-sdk/provider'
 import { APICallError, isJSONObject } from '@ai-sdk/provider'
 import * as errore from 'errore'
+import { randomUUID } from 'node:crypto'
 import {
   adapters,
   classifyFailure,
@@ -39,6 +40,7 @@ import {
   type ModelsDevCatalog,
   type SubrouterLog,
 } from './adapters/index.ts'
+import { OPENCODE_GO_SESSION_HEADER } from './adapters/opencode-go.ts'
 import {
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
@@ -822,6 +824,9 @@ function candidateCallOptions({
     headers.set(OPENAI_WEBSOCKET_SESSION_HEADER, sessionId)
   }
   if (candidate.provider === 'openai' && title) headers.set(OPENAI_WEBSOCKET_TITLE_HEADER, title)
+  if (candidate.provider === 'opencode-go') {
+    headers.set(OPENCODE_GO_SESSION_HEADER, sessionId || randomUUID())
+  }
   return {
     ...options,
     headers: Object.fromEntries(headers),

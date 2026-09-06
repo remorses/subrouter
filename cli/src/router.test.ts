@@ -45,6 +45,7 @@ type MockServer = {
     path: string
     authorization: string | undefined
     userAgent: string | undefined
+    opencodeSession: string | undefined
     body: string
   }[]
   close: () => Promise<void>
@@ -82,6 +83,7 @@ async function startMockServer(respond: (request: { path: string }) => MockRespo
         path: req.url ?? '',
         authorization: req.headers.authorization,
         userAgent: req.headers['user-agent'],
+        opencodeSession: headerValue(req.headers['x-opencode-session']),
         body,
       })
       const response = respond({ path: req.url ?? '' })
@@ -109,6 +111,7 @@ async function startChatSseServer({
         path: req.url ?? '',
         authorization: req.headers.authorization,
         userAgent: req.headers['user-agent'],
+        opencodeSession: headerValue(req.headers['x-opencode-session']),
         body,
       })
       res.writeHead(200, { 'content-type': 'text/event-stream' })
@@ -147,6 +150,10 @@ const chatCompletionOk = (text: string): MockResponse => ({
     usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
   }),
 })
+
+function headerValue(value: string | string[] | undefined) {
+  return Array.isArray(value) ? value[0] : value
+}
 
 function oauthAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
   return {
@@ -316,6 +323,9 @@ describe('RouterModel failover', () => {
       'claude-cli/2.1.257 (external, cli)',
     ])
     expect(opencodeMock.requests[0]!.authorization).toBe('Bearer zen-key')
+    expect(opencodeMock.requests[0]!.opencodeSession).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    )
 
     // Both anthropic accounts are now cooling down globally
     const state = await loadState()
@@ -410,6 +420,24 @@ describe('RouterModel failover', () => {
     const result = await sdk.languageModel('gpt-5.5').doGenerate(callOptions)
     const texts = result.content.filter((part) => part.type === 'text').map((part) => part.text)
     expect(texts).toEqual(['hello from fallback'])
+  })
+
+  test('sends x-opencode-session from the harness session id', async () => {
+    const opencodeMock = await startMockServer(() => chatCompletionOk('ok'))
+    servers = [opencodeMock]
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'go', models: ['opencode-go/fake-model'] })
+
+    await new RouterModel({ preset: 'go' }).doGenerate({
+      ...callOptions,
+      headers: { [OPENAI_WEBSOCKET_SESSION_HEADER]: 'ses_abc' },
+    })
+
+    expect(opencodeMock.requests[0]!.opencodeSession).toBe('ses_abc')
   })
 
   test('persists a short retry-after as the account cooldown', async () => {
@@ -707,6 +735,7 @@ describe('RouterModel failover', () => {
     })
     await clearCooldowns()
 
+    expect(opencodeMock.requests[0]!.opencodeSession).toBe('session-1')
     expect(await resolveLiveModel({ preset: 'test', sessionID: 'session-1' })).toMatchObject({
       provider: 'opencode-go',
       modelId: 'fake-model',

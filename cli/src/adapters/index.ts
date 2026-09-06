@@ -28,6 +28,7 @@ export {
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
 } from './openai.ts'
+export { OPENCODE_GO_SESSION_HEADER } from './opencode-go.ts'
 import { opencodeGoAdapter } from './opencode-go.ts'
 import { poeAdapter } from './poe.ts'
 import { xaiAdapter } from './xai.ts'
