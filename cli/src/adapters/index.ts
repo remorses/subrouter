@@ -179,6 +179,33 @@ export class InvalidModelError extends errore.createTaggedError({
   message: 'Model $entry is not available as a text-output language model in models.dev',
 }) {}
 
+export class InvalidVariantError extends errore.createTaggedError({
+  name: 'InvalidVariantError',
+}) {}
+
+export type PresetEntry = {
+  provider: ProviderId
+  modelId: string
+  variant?: string
+}
+
+export function parsePresetEntry(entry: string): PresetEntry | null {
+  const slash = entry.indexOf('/')
+  if (slash <= 0) return null
+  const provider = entry.slice(0, slash)
+  if (!isProviderId(provider)) return null
+  const rest = entry.slice(slash + 1)
+  const hash = rest.lastIndexOf('#')
+  if (hash === -1) {
+    if (!rest) return null
+    return { provider, modelId: rest }
+  }
+  const modelId = rest.slice(0, hash)
+  const variant = rest.slice(hash + 1)
+  if (!modelId || !variant) return null
+  return { provider, modelId, variant }
+}
+
 const modelsDevModalitySchema = z.enum(['text', 'audio', 'image', 'video', 'pdf'])
 
 const modelsDevLimitSchema = z.object({
@@ -200,6 +227,14 @@ const modelsDevModelSchema = z.object({
     })
     .optional(),
   limit: modelsDevLimitSchema.optional(),
+  reasoning_options: z
+    .array(
+      z.object({
+        type: z.string(),
+        values: z.array(z.union([z.string(), z.null()])).optional(),
+      }),
+    )
+    .optional(),
 })
 
 export type ModelsDevLimit = {
@@ -218,6 +253,7 @@ export type ModelsDevModel = {
     output: Array<z.infer<typeof modelsDevModalitySchema>>
   }
   limit: ModelsDevLimit | null
+  variants: string[]
 }
 
 function catalogLimit(model: z.infer<typeof modelsDevModelSchema>): ModelsDevLimit | null {
@@ -226,6 +262,18 @@ function catalogLimit(model: z.infer<typeof modelsDevModelSchema>): ModelsDevLim
   if (typeof context !== 'number' || typeof output !== 'number') return null
   const input = model.limit?.input
   return { context, input, output }
+}
+
+function catalogVariants(model: z.infer<typeof modelsDevModelSchema>) {
+  const variants: string[] = []
+  for (const option of model.reasoning_options ?? []) {
+    if (option.type !== 'effort') continue
+    for (const value of option.values ?? []) {
+      if (typeof value !== 'string' || !value || variants.includes(value)) continue
+      variants.push(value)
+    }
+  }
+  return variants
 }
 
 function catalogModel(model: z.infer<typeof modelsDevModelSchema>): ModelsDevModel {
@@ -239,6 +287,7 @@ function catalogModel(model: z.infer<typeof modelsDevModelSchema>): ModelsDevMod
       output: model.modalities?.output ?? [],
     },
     limit: catalogLimit(model),
+    variants: catalogVariants(model),
   }
 }
 
@@ -418,12 +467,21 @@ export function validateModelsDevModelIds({
   catalog: ModelsDevCatalog
 }) {
   for (const entry of entries) {
-    const slash = entry.indexOf('/')
-    const provider = entry.slice(0, slash)
-    const model = entry.slice(slash + 1)
-    if (!isProviderId(provider)) return new InvalidModelError({ entry })
-
-    if (!catalog[provider].has(model)) return new InvalidModelError({ entry })
+    const parsed = parsePresetEntry(entry)
+    if (!parsed) return new InvalidModelError({ entry })
+    const model = catalog[parsed.provider].get(parsed.modelId)
+    if (!model) return new InvalidModelError({ entry })
+    if (!parsed.variant) continue
+    if (model.variants.length === 0) {
+      return new InvalidVariantError({
+        message: `Model ${parsed.provider}/${parsed.modelId} does not support variants`,
+      })
+    }
+    if (!model.variants.includes(parsed.variant)) {
+      return new InvalidVariantError({
+        message: `Variant ${parsed.variant} is not valid for ${parsed.provider}/${parsed.modelId}. Valid variants: ${model.variants.join(', ')}`,
+      })
+    }
   }
   return null
 }

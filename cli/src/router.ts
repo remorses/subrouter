@@ -7,7 +7,7 @@
  * cooldown, filters out models that cannot accept the prompt modalities, and
  * delegates to the first usable underlying model. When a call fails with a
  * rate-limit/usage error, the account is put in cooldown
- * (globally, in ~/.subrouter/config.json) and the next candidate is tried.
+ * (globally, in ~/.subrouter/config.json cooldowns) and the next candidate is tried.
  * A successful candidate stays first for later calls in the same agent run.
  * Cooling-down-only failures throw a retryable 429 so OpenCode waits
  * instead of dying. It only throws a hard error when nothing can be retried.
@@ -37,6 +37,8 @@ import {
   failureDetailsFromError,
   loadModelsDevCatalog,
   modelsDevInputModalities,
+  modelsDevModel,
+  parsePresetEntry,
   type ModelsDevCatalog,
   type SubrouterLog,
 } from './adapters/index.ts'
@@ -59,7 +61,6 @@ import {
   cooldownKey,
   type ProviderId,
   type StoredAccount,
-  isProviderId,
 } from './store.ts'
 
 export class PresetNotFoundError extends errore.createTaggedError({
@@ -119,6 +120,7 @@ export async function resolvePresetModels(preset: string): Promise<PresetNotFoun
 export type Candidate = {
   provider: ProviderId
   modelId: string
+  variant?: string
   account: StoredAccount
   accountIndex: number
 }
@@ -211,13 +213,12 @@ export function filterPresetModelsByInput({
   const compatible: string[] = []
   const skipped: string[] = []
   for (const entry of presetModels) {
-    const slash = entry.indexOf('/')
-    const provider = entry.slice(0, slash)
-    const modelId = entry.slice(slash + 1)
-    if (slash <= 0 || !isProviderId(provider)) {
+    const parsed = parsePresetEntry(entry)
+    if (!parsed) {
       compatible.push(entry)
       continue
     }
+    const { provider, modelId } = parsed
     const input = modelsDevInputModalities({ provider, modelId, catalog })
     const missing = input ? [...required].filter((modality) => !input.includes(modality)) : []
     if (missing.length === 0) {
@@ -253,15 +254,12 @@ export async function resolveCandidates({
   let retryAfterMs: number | undefined
 
   for (const entry of presetModels) {
-    const slash = entry.indexOf('/')
-    if (slash <= 0) continue
-    const providerRaw = entry.slice(0, slash)
-    const modelId = entry.slice(slash + 1)
-    if (!isProviderId(providerRaw)) {
+    const parsed = parsePresetEntry(entry)
+    if (!parsed) {
       skipped.push(`${entry}: unknown provider`)
       continue
     }
-    const provider = providerRaw
+    const { provider, modelId, variant } = parsed
     const pool = accounts.providers[provider]
     if (!pool || pool.accounts.length === 0) {
       skipped.push(`${entry}: no accounts (run: subrouter login ${provider})`)
@@ -277,13 +275,13 @@ export async function resolveCandidates({
         if (typeof until === 'number') {
           const remaining = until - now
           if (remaining > 0) {
-            coolingDown.push({ provider, modelId, account, accountIndex, until })
+            coolingDown.push({ provider, modelId, variant, account, accountIndex, until })
             retryAfterMs = retryAfterMs === undefined ? remaining : Math.min(retryAfterMs, remaining)
           }
         }
         continue
       }
-      candidates.push({ provider, modelId, account, accountIndex })
+      candidates.push({ provider, modelId, variant, account, accountIndex })
     }
   }
 
@@ -317,8 +315,24 @@ function cooldownRetryError({
   })
 }
 
-export function formatCandidateRef(candidate: Pick<Candidate, 'provider' | 'modelId'>) {
-  return `${candidate.provider}/${candidate.modelId}`
+export function formatCandidateRef(candidate: Pick<Candidate, 'provider' | 'modelId' | 'variant'>) {
+  const ref = `${candidate.provider}/${candidate.modelId}`
+  return candidate.variant ? `${ref}#${candidate.variant}` : ref
+}
+
+export function variantProviderOptions({
+  provider,
+  modelId,
+  variant,
+}: {
+  provider: ProviderId
+  modelId?: string
+  variant: string
+}): Record<string, JSONValue> {
+  const sdkKey = sdkProviderOptionsKey({ provider, modelId: modelId ?? '' })
+  if (sdkKey === 'anthropic') return { thinking: { type: 'adaptive' }, effort: variant }
+  if (sdkKey === 'openai') return { reasoningEffort: variant, reasoningSummary: 'auto' }
+  return { reasoningEffort: variant }
 }
 
 export type RouterEvent =
@@ -459,11 +473,9 @@ export class RouterModel implements LanguageModelV3 {
     if (!this.onCooldownFallback) return
     const preferredEntry = presetModels[0]
     if (!preferredEntry) return
-    const slash = preferredEntry.indexOf('/')
-    if (slash <= 0) return
-    const provider = preferredEntry.slice(0, slash)
-    if (!isProviderId(provider)) return
-    const modelId = preferredEntry.slice(slash + 1)
+    const parsed = parsePresetEntry(preferredEntry)
+    if (!parsed) return
+    const { provider, modelId } = parsed
     const isPreferred = (candidate: Pick<Candidate, 'provider' | 'modelId'>) =>
       candidate.provider === provider && candidate.modelId === modelId
     if (candidates.some(isPreferred)) return
@@ -505,20 +517,25 @@ export class RouterModel implements LanguageModelV3 {
     inspect = async (value) => ({ ok: true, value }),
   }: {
     options: LanguageModelV3CallOptions
-    run: (model: LanguageModelV3, candidate: Candidate) => PromiseLike<T>
+    run: (model: LanguageModelV3, candidate: Candidate, callOptions: LanguageModelV3CallOptions) => PromiseLike<T>
     inspect?: (value: T, candidate: Candidate) => Promise<Attempt<T>>
   }): Promise<T> {
     const presetModels = await resolvePresetModels(this.modelId)
     if (presetModels instanceof Error) throw presetModels
 
     const required = requiredInputModalities(options)
+    const sessionVariant = sessionVariantFromOptions(options)
+    const catalog =
+      required.size === 1 && !sessionVariant
+        ? undefined
+        : await loadModelsDevCatalog({ log: this.log })
     const compatible =
-      required.size === 1
+      required.size === 1 || catalog === undefined
         ? { presetModels, skipped: [] }
         : filterPresetModelsByInput({
             presetModels,
             required,
-            catalog: await loadModelsDevCatalog({ log: this.log }),
+            catalog,
           })
     const resolved = await resolveCandidates({ presetModels: compatible.presetModels })
     const headers = new Headers()
@@ -558,8 +575,9 @@ export class RouterModel implements LanguageModelV3 {
       this.onEvent?.(trying)
       logRouterEvent(trying, this.log)
       const model = this.buildModel(candidate)
+      const callOptions = candidateCallOptions({ options, candidate, catalog })
       const result = await Promise.resolve()
-        .then(() => run(model, candidate))
+        .then(() => run(model, candidate, callOptions))
         .then(
           (value) => ({ ok: true as const, value }),
           (error) => ({
@@ -630,14 +648,14 @@ export class RouterModel implements LanguageModelV3 {
   async doGenerate(options: LanguageModelV3CallOptions) {
     return this.withFailover({
       options,
-      run: (model, candidate) => model.doGenerate(candidateCallOptions({ options, candidate })),
+      run: (model, _candidate, callOptions) => model.doGenerate(callOptions),
     })
   }
 
   async doStream(options: LanguageModelV3CallOptions) {
     return this.withFailover({
       options,
-      run: (model, candidate) => model.doStream(candidateCallOptions({ options, candidate })),
+      run: (model, _candidate, callOptions) => model.doStream(callOptions),
       inspect: (result, candidate) =>
         inspectStream({
           result,
@@ -773,25 +791,101 @@ function withEncryptedReasoningInclude(include: JSONValue | undefined) {
   return values
 }
 
-function sdkProviderOptionsKey(provider: ProviderId) {
-  if (provider === 'openai' || provider === 'github-copilot') return 'openai'
-  if (provider === 'xai') return 'xai'
-  if (provider === 'anthropic') return 'anthropic'
+function sdkProviderOptionsKey(candidate: Pick<Candidate, 'provider' | 'modelId'>) {
+  if (candidate.provider === 'github-copilot' && candidate.modelId.startsWith('claude-') && candidate.modelId !== 'claude-fable-5') {
+    return 'anthropic'
+  }
+  if (candidate.provider === 'openai' || candidate.provider === 'github-copilot') return 'openai'
+  if (candidate.provider === 'xai') return 'xai'
+  if (candidate.provider === 'anthropic' || candidate.provider === 'minimax' || candidate.provider === 'kimi') return 'anthropic'
+  if (
+    candidate.provider === 'opencode-go' ||
+    candidate.provider === 'poe' ||
+    candidate.provider === 'zai' ||
+    candidate.provider === 'alibaba'
+  ) {
+    return candidate.provider
+  }
   return null
+}
+
+const SESSION_VARIANT_KEYS = ['reasoningEffort', 'reasoningSummary', 'effort', 'thinking'] as const
+
+function sessionVariantFromOptions(options: LanguageModelV3CallOptions) {
+  const headers = new Headers()
+  for (const [key, value] of Object.entries(options.headers ?? {})) {
+    if (value !== undefined) headers.set(key, value)
+  }
+  return headers.get(OPENCODE_VARIANT_HEADER) ?? undefined
+}
+
+function withoutSessionVariantFields(value: JSONValue | undefined) {
+  const record = asJsonRecord(value)
+  for (const key of SESSION_VARIANT_KEYS) delete record[key]
+  return record
+}
+
+function resolvedCandidateVariant({
+  candidate,
+  sessionVariant,
+  catalog,
+}: {
+  candidate: Candidate
+  sessionVariant?: string
+  catalog?: ModelsDevCatalog | Error
+}) {
+  if (!sessionVariant) return candidate.variant
+  if (!catalog || catalog instanceof Error) return sessionVariant
+  const model = modelsDevModel({
+    provider: candidate.provider,
+    modelId: candidate.modelId,
+    catalog,
+  })
+  if (!model) return sessionVariant
+  if (model.variants.includes(sessionVariant)) return sessionVariant
+  return candidate.variant
+}
+
+function asJsonRecord(value: JSONValue | undefined) {
+  const record: Record<string, JSONValue> = {}
+  if (!isJSONObject(value)) return record
+  for (const [key, item] of Object.entries(value)) {
+    if (item !== undefined) record[key] = item
+  }
+  return record
+}
+
+function mergeSdkOptions(current: JSONValue | undefined, extra: JSONValue | undefined) {
+  return { ...asJsonRecord(current), ...asJsonRecord(extra) }
 }
 
 function candidateProviderOptions({
   options,
   candidate,
+  sessionVariant,
+  catalog,
 }: {
   options: LanguageModelV3CallOptions
   candidate: Candidate
+  sessionVariant?: string
+  catalog?: ModelsDevCatalog | Error
 }) {
   const current = { ...options.providerOptions }
-  const sdkKey = sdkProviderOptionsKey(candidate.provider)
+  const sdkKey = sdkProviderOptionsKey(candidate)
   const harness = current[PROVIDER_ID]
+  const variant = resolvedCandidateVariant({ candidate, sessionVariant, catalog })
   if (sdkKey && isJSONObject(harness)) {
-    current[sdkKey] = { ...current[sdkKey], ...harness }
+    current[sdkKey] = mergeSdkOptions(
+      current[sdkKey],
+      sessionVariant && sessionVariant !== variant ? withoutSessionVariantFields(harness) : harness,
+    )
+  }
+  if (sdkKey && variant) {
+    current[sdkKey] = mergeSdkOptions(current[sdkKey], variantProviderOptions({
+      provider: candidate.provider,
+      modelId: candidate.modelId,
+      variant,
+    }))
   }
   const openai = isJSONObject(current.openai) ? current.openai : {}
   const xai = isJSONObject(current.xai) ? current.xai : {}
@@ -805,9 +899,11 @@ function candidateProviderOptions({
 function candidateCallOptions({
   options,
   candidate,
+  catalog,
 }: {
   options: LanguageModelV3CallOptions
   candidate: Candidate
+  catalog?: ModelsDevCatalog | Error
 }) {
   const headers = new Headers()
   for (const [key, value] of Object.entries(options.headers ?? {})) {
@@ -815,6 +911,7 @@ function candidateCallOptions({
   }
   const sessionId = headers.get(OPENAI_WEBSOCKET_SESSION_HEADER)
   const title = headers.get(OPENAI_WEBSOCKET_TITLE_HEADER)
+  const sessionVariant = headers.get(OPENCODE_VARIANT_HEADER) ?? undefined
   headers.delete(OPENAI_WEBSOCKET_SESSION_HEADER)
   headers.delete(OPENAI_WEBSOCKET_TITLE_HEADER)
   headers.delete(OPENCODE_AGENT_HEADER)
@@ -830,7 +927,7 @@ function candidateCallOptions({
   return {
     ...options,
     headers: Object.fromEntries(headers),
-    providerOptions: candidateProviderOptions({ options, candidate }),
+    providerOptions: candidateProviderOptions({ options, candidate, sessionVariant, catalog }),
   }
 }
 

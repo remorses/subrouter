@@ -1,7 +1,7 @@
 /** Exercises the published CLI entry against real local state. */
 
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -64,6 +64,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  delete process.env.SUBROUTER_MODELS_DEV_URL
   await rm(home, { recursive: true, force: true })
 })
 
@@ -92,6 +93,69 @@ describe('destructive commands', () => {
     expect((await loadAccounts()).providers.anthropic?.accounts).toHaveLength(1)
     expect((await loadPresets()).presets.work).toEqual(['anthropic/claude-opus-4-6'])
     expect(Object.keys((await loadState()).cooldowns)).toHaveLength(1)
+  })
+})
+
+describe('preset create', () => {
+  test('saves ranked #variant entries and rejects unknown variants', async () => {
+    const catalog = {
+      anthropic: {
+        models: {
+          'claude-opus-4-6': {
+            id: 'claude-opus-4-6',
+            modalities: { output: ['text'] },
+            reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'max'] }],
+          },
+        },
+      },
+      openai: {
+        models: {
+          'gpt-5.5': {
+            id: 'gpt-5.5',
+            modalities: { output: ['text'] },
+            reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }],
+          },
+        },
+      },
+      xai: { models: {} },
+      'opencode-go': { models: {} },
+      'github-copilot': { models: {} },
+      poe: { models: {} },
+      'minimax-coding-plan': { models: {} },
+      'kimi-for-coding': { models: {} },
+      'zai-coding-plan': { models: {} },
+      'alibaba-coding-plan': { models: {} },
+    }
+    const catalogUrl = 'http://127.0.0.1:1'
+    process.env.SUBROUTER_MODELS_DEV_URL = catalogUrl
+    await writeFile(
+      path.join(home, 'models-dev.json'),
+      JSON.stringify({ fetchedAt: Date.now(), url: catalogUrl, payload: catalog }),
+    )
+
+    const saved = await runCli(
+      'preset',
+      'create',
+      'work',
+      '--models',
+      'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high',
+    )
+    expect(saved.code).toBe(0)
+    expect((await loadPresets()).presets.work).toEqual([
+      'anthropic/claude-opus-4-6#max',
+      'openai/gpt-5.5#high',
+    ])
+
+    const invalid = await runCli(
+      'preset',
+      'create',
+      'bad',
+      '--models',
+      'openai/gpt-5.5#max',
+    )
+    expect(invalid.code).toBe(1)
+    expect(invalid.stderr).toContain('max')
+    expect(invalid.stderr).toContain('low, medium, high')
   })
 })
 

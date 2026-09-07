@@ -973,6 +973,115 @@ describe('RouterModel failover', () => {
     expect(body.reasoning).toEqual({ effort: 'low' })
   })
 
+  test('applies preset #variant onto the live SDK unless the harness already set one', async () => {
+    const xaiOk: MockResponse = {
+      status: 200,
+      body: JSON.stringify({
+        id: 'resp_1',
+        object: 'response',
+        created_at: 1,
+        status: 'completed',
+        model: 'grok-4.6',
+        output: [
+          {
+            type: 'message',
+            id: 'msg_1',
+            status: 'completed',
+            role: 'assistant',
+            content: [{ type: 'output_text', text: 'ok', annotations: [] }],
+          },
+        ],
+        usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+      }),
+    }
+    const xaiMock = await startMockServer(() => xaiOk)
+    servers = [xaiMock]
+    process.env.SUBROUTER_XAI_BASE_URL = `${xaiMock.url}/v1`
+
+    await addAccount({ provider: 'xai', account: oauthAccount({ accountId: 'xai-1' }) })
+    await savePreset({ name: 'test', models: ['xai/grok-4.6#high'] })
+
+    await new RouterModel({ preset: 'test' }).doGenerate(callOptions)
+    const presetBody = JSON.parse(xaiMock.requests[0]!.body) as {
+      reasoning?: { effort?: string }
+    }
+    expect(presetBody.reasoning).toEqual({ effort: 'high' })
+
+    await new RouterModel({ preset: 'test' }).doGenerate({
+      ...callOptions,
+      headers: { 'x-subrouter-opencode-variant': 'low' },
+    })
+    const sessionBody = JSON.parse(xaiMock.requests[1]!.body) as {
+      reasoning?: { effort?: string }
+    }
+    expect(sessionBody.reasoning).toEqual({ effort: 'low' })
+  })
+
+  test('does not send an unsupported session variant to a fallback candidate', async () => {
+    const emptyProvider = { models: {} }
+    const modelsDev = await startMockServer(() => ({
+      status: 200,
+      body: JSON.stringify({
+        anthropic: {
+          models: {
+            'claude-fake': {
+              id: 'claude-fake',
+              modalities: { output: ['text'] },
+              reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high', 'max'] }],
+            },
+          },
+        },
+        openai: emptyProvider,
+        xai: emptyProvider,
+        'opencode-go': {
+          models: {
+            'fake-model': {
+              id: 'fake-model',
+              modalities: { output: ['text'] },
+              reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }],
+            },
+          },
+        },
+        'github-copilot': emptyProvider,
+        poe: emptyProvider,
+        'minimax-coding-plan': emptyProvider,
+        'kimi-for-coding': emptyProvider,
+        'zai-coding-plan': emptyProvider,
+        'alibaba-coding-plan': emptyProvider,
+      }),
+    }))
+    const anthropicMock = await startMockServer(() => anthropic429)
+    const opencodeMock = await startMockServer(() => chatCompletionOk('fallback'))
+    servers = [modelsDev, anthropicMock, opencodeMock]
+    process.env.SUBROUTER_MODELS_DEV_URL = modelsDev.url
+    process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake#max', 'opencode-go/fake-model#high'] })
+
+    await new RouterModel({ preset: 'test' }).doGenerate({
+      ...callOptions,
+      headers: { 'x-subrouter-opencode-variant': 'max' },
+      providerOptions: { subrouter: { reasoningEffort: 'max', effort: 'max' } },
+    })
+
+    const anthropicBody = JSON.parse(anthropicMock.requests[0]!.body) as {
+      output_config?: { effort?: string }
+      thinking?: { type?: string }
+    }
+    expect(anthropicBody.output_config).toEqual({ effort: 'max' })
+    expect(anthropicBody.thinking).toEqual({ type: 'adaptive' })
+    const fallbackBody = JSON.parse(opencodeMock.requests[0]!.body) as {
+      reasoning_effort?: string
+    }
+    expect(fallbackBody.reasoning_effort).toBe('high')
+  })
+
   test('missing preset throws PresetNotFoundError', async () => {
     const model = new RouterModel({ preset: 'nope' })
     const result = await model.doGenerate(callOptions).catch((error: Error) => error)

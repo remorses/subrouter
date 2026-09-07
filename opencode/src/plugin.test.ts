@@ -63,12 +63,13 @@ async function startFakeModelsDev(
           temperature?: boolean
           tool_call?: boolean
           modalities?: { input?: string[]; output?: string[] }
-          limit?: { context?: number; output?: number; input?: number }
-        }
-      >
-    }
-  > = {},
-) {
+           limit?: { context?: number; output?: number; input?: number }
+           reasoning_options?: Array<{ type: string; values?: Array<string | null> }>
+         }
+       >
+     }
+   > = {},
+ ) {
   const payload = {
     anthropic: { models: {} },
     openai: { models: {} },
@@ -360,6 +361,49 @@ test('preset reasoning follows the first live candidate', async () => {
   await hooks.config?.(config)
 
   expect(config.provider?.subrouter?.models?.work?.reasoning).toBe(true)
+})
+
+test('preset variants follow the first live candidate', async () => {
+  const modelId = adapters.openai.defaultModels[0]
+  if (!modelId) throw new Error('openai adapter has no default model')
+  process.env.SUBROUTER_MODELS_DEV_URL = await startFakeModelsDev({
+    openai: {
+      models: {
+        [modelId]: {
+          id: modelId,
+          reasoning: true,
+          modalities: { input: ['text'], output: ['text'] },
+          reasoning_options: [{ type: 'effort', values: ['none', 'low', 'medium', 'high'] }],
+        },
+      },
+    },
+  })
+  await addAccount({
+    provider: 'openai',
+    account: {
+      type: 'oauth',
+      refresh: 'refresh-1',
+      access: 'access-1',
+      expires: Date.now() + 60_000,
+      email: 'a@x.com',
+      addedAt: 1,
+      lastUsed: 1,
+    },
+  })
+  await savePreset({ name: 'work', models: [`openai/${modelId}#high`] })
+
+  const hooks = await subrouterPlugin(pluginInput)
+  const config: Config = {}
+  await hooks.config?.(config)
+
+  expect(config.provider?.subrouter?.models?.work).toMatchObject({
+    variants: {
+      none: { reasoningEffort: 'none', reasoningSummary: 'auto' },
+      low: { reasoningEffort: 'low', reasoningSummary: 'auto' },
+      medium: { reasoningEffort: 'medium', reasoningSummary: 'auto' },
+      high: { reasoningEffort: 'high', reasoningSummary: 'auto' },
+    },
+  })
 })
 
 test('preset model input modalities are the union of usable candidates', async () => {

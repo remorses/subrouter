@@ -13,6 +13,7 @@ export {
   modelsDevInputModalities,
   modelsDevLimit,
   modelsDevModel,
+  parsePresetEntry,
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
   OPENCODE_GO_SESSION_HEADER,

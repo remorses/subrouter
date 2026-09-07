@@ -11,6 +11,7 @@ import {
   modelsDevLimit,
   modelsDevModel,
   parseModelsDevCatalog,
+  parsePresetEntry,
   validateModelsDevModelIds,
 } from './index.ts'
 import { rewriteRequestPayload } from './anthropic.ts'
@@ -277,6 +278,74 @@ describe('models.dev validation', () => {
     `)
   })
 
+  test('parses optional #variant on preset entries', () => {
+    expect(parsePresetEntry('openai/gpt-5.5')).toEqual({
+      provider: 'openai',
+      modelId: 'gpt-5.5',
+    })
+    expect(parsePresetEntry('poe/anthropic/claude-opus-4.8#high')).toEqual({
+      provider: 'poe',
+      modelId: 'anthropic/claude-opus-4.8',
+      variant: 'high',
+    })
+    expect(parsePresetEntry('openai/gpt-5.5#')).toBeNull()
+    expect(parsePresetEntry('openai/#high')).toBeNull()
+  })
+
+  test('accepts catalog effort variants and rejects unknown ones', () => {
+    const catalog = parseModelsDevCatalog({
+      ...payload,
+      openai: {
+        models: {
+          'text-only': {
+            id: 'text-only',
+            modalities: { output: ['text'] },
+            reasoning_options: [{ type: 'effort', values: ['low', 'medium', 'high'] }],
+          },
+          multimodal: {
+            id: 'multimodal',
+            modalities: { output: ['text'] },
+          },
+        },
+      },
+      anthropic: {
+        models: {
+          'claude-opus-4-6': {
+            id: 'claude-opus-4-6',
+            modalities: { output: ['text'] },
+            reasoning: true,
+            reasoning_options: [
+              { type: 'effort', values: ['low', 'medium', 'high', 'max'] },
+              { type: 'budget_tokens', min: 1024 },
+            ],
+          },
+        },
+      },
+    })
+    expect(catalog).not.toBeInstanceOf(Error)
+    if (catalog instanceof Error) return
+
+    expect(
+      modelsDevModel({ provider: 'openai', modelId: 'text-only', catalog })?.variants,
+    ).toEqual(['low', 'medium', 'high'])
+    expect(
+      validateModelsDevModelIds({ entries: ['openai/text-only#high'], catalog }),
+    ).toBeNull()
+    expect(
+      validateModelsDevModelIds({ entries: ['anthropic/claude-opus-4-6#max'], catalog }),
+    ).toBeNull()
+    expect(
+      validateModelsDevModelIds({ entries: ['openai/text-only#max'], catalog }),
+    ).toMatchInlineSnapshot(
+      `[InvalidVariantError: Variant max is not valid for openai/text-only. Valid variants: low, medium, high]`,
+    )
+    expect(
+      validateModelsDevModelIds({ entries: ['openai/multimodal#high'], catalog }),
+    ).toMatchInlineSnapshot(
+      `[InvalidVariantError: Model openai/multimodal does not support variants]`,
+    )
+  })
+
   test('accepts opencode-go text models', () => {
     const catalog = parseModelsDevCatalog({
       ...payload,
@@ -320,6 +389,7 @@ describe('models.dev validation', () => {
       toolCall: true,
       modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
       limit: { context: 400_000, input: 360_000, output: 32_000 },
+      variants: [],
     })
     expect(
       modelsDevLimit({ provider: 'openai', modelId: 'text-only', catalog }),

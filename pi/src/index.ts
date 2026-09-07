@@ -14,6 +14,7 @@ import {
   type Model,
   type Provider,
   type ProviderResponse,
+  type SimpleStreamOptions,
   type StreamOptions,
 } from '@earendil-works/pi-ai'
 import { closeOpenAICodexWebSocketSessions } from '@earendil-works/pi-ai/api/openai-codex-responses'
@@ -31,11 +32,11 @@ import {
   emitLog,
   formatCandidateRef,
   logRouterEvent,
-  isProviderId,
   loadAccounts,
   loadPresets,
   markCooldown,
   NoUsableAccountError,
+  parsePresetEntry,
   PROVIDER_DISPLAY_NAME,
   PROVIDER_ID,
   resolveActiveCandidate,
@@ -191,12 +192,18 @@ function endWithError({
   stream.end()
 }
 
-function parsePresetEntry(entry: string) {
-  const slash = entry.indexOf('/')
-  if (slash <= 0) return null
-  const provider = entry.slice(0, slash)
-  if (!isProviderId(provider)) return null
-  return { provider, modelId: entry.slice(slash + 1) }
+function piThinkingLevel(variant: string | undefined) {
+  if (
+    variant === 'minimal' ||
+    variant === 'low' ||
+    variant === 'medium' ||
+    variant === 'high' ||
+    variant === 'xhigh' ||
+    variant === 'max'
+  ) {
+    return variant
+  }
+  return undefined
 }
 
 function targetModel({ candidate, providers }: { candidate: Candidate; providers: Map<string, Provider> }) {
@@ -283,7 +290,7 @@ function streamPreset({
 }: {
   model: Model<Api>
   context: Context
-  options?: StreamOptions
+  options?: StreamOptions & { reasoning?: SimpleStreamOptions['reasoning'] }
   providers: Map<string, Provider>
   affinity: RouteAffinity
   activeRouteKeys: Map<string, string>
@@ -364,8 +371,10 @@ function streamPreset({
       if (candidate.provider === 'opencode-go') {
         headers[OPENCODE_GO_SESSION_HEADER] = options?.sessionId || crypto.randomUUID()
       }
+      const thinking = piThinkingLevel(candidate.variant)
       const inner = target.provider.streamSimple(target.model, routedContext, {
         ...options,
+        reasoning: options?.reasoning ?? thinking,
         apiKey: usesBearerHeader ? undefined : apiKey,
         headers,
         maxRetries: 0,

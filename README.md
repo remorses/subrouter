@@ -128,7 +128,7 @@ Cooldowns are **global per machine** (`~/.subrouter/config.json`). Once an accou
 
 ### Presets
 
-Presets are ordered lists of `provider/model` entries. Every preset shows up in opencode Go and Pi as `subrouter/<preset-name>`.
+Presets are ordered lists of `provider/model` entries. Append `#variant` to pin reasoning effort, for example `openai/gpt-5.5#high`. Every preset shows up in opencode Go and Pi as `subrouter/<preset-name>`.
 
 ## Difference from OpenRouter and API proxies
 
@@ -209,13 +209,13 @@ State lives in **`~/.subrouter/config.json`**. The file includes a `$schema` URL
 ### Presets
 
 ```bash
-npx @subrouter/cli preset create <name> --models 'anthropic/claude-opus-4-6,xai/grok-4.6' [--force]
+npx @subrouter/cli preset create <name> --models 'anthropic/claude-opus-4-6#max,xai/grok-4.6' [--force]
 npx @subrouter/cli preset list
 npx @subrouter/cli preset show [name]       # includes currently usable candidates
 npx @subrouter/cli preset remove [name] [--force]
 ```
 
-The order passed to `--models` is the fallback order. Every preset appears in both harnesses as `subrouter/<name>`.
+The order passed to `--models` is the fallback order. Append `#variant` to pin reasoning effort for that candidate. `preset create` checks the variant against models.dev. A session `--variant` or `subrouter/<name>#high` still wins over the preset pin. Every preset appears in both harnesses as `subrouter/<name>`.
 
 ### Status and cooldowns
 

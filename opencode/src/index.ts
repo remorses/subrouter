@@ -32,6 +32,7 @@ import {
   modelsDevInputModalities,
   modelsDevLimit,
   modelsDevModel,
+  variantProviderOptions,
   PROVIDER_DISPLAY_NAME,
   PROVIDER_ID,
   PROVIDER_IDS,
@@ -163,19 +164,36 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
             takenApiIds.add(apiId)
             presetByApiId[apiId] = name
           }
-          const reasoning = candidate
-            ? (modelsDevModel({
+          const catalogModel = candidate
+            ? modelsDevModel({
                 provider: candidate.provider,
                 modelId: candidate.modelId,
                 catalog,
-              })?.reasoning ?? false)
-            : false
+              })
+            : null
+          const reasoning = catalogModel?.reasoning ?? false
+          const variants = candidate
+            ? Object.fromEntries(
+                (catalogModel?.variants ?? []).map((variant) => [
+                  variant,
+                  variantProviderOptions({
+                    provider: candidate.provider,
+                    modelId: candidate.modelId,
+                    variant,
+                  }),
+                ]),
+              )
+            : {}
           const model: {
             name: string
             id?: string
             tool_call: true
             attachment: boolean
             reasoning: boolean
+            variants?: Record<
+              string,
+              { thinking?: { type: string }; effort?: string; reasoningEffort?: string; reasoningSummary?: string }
+            >
             modalities: {
               input: Array<'text' | 'audio' | 'image' | 'video' | 'pdf'>
               output: Array<'text'>
@@ -195,6 +213,7 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
             limit: limit ?? { context: 200_000, output: 64_000 },
           }
           if (apiId) model.id = apiId
+          if (Object.keys(variants).length > 0) model.variants = variants
           return [name, model]
         }),
       )

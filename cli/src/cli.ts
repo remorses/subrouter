@@ -14,6 +14,7 @@ import dedent from 'string-dedent'
 import {
   adapters,
   loadModelsDevCatalog,
+  parsePresetEntry,
   runLogin,
   validateModelsDevModelIds,
 } from './adapters/index.ts'
@@ -146,14 +147,11 @@ function parsePresetModels(raw: string, ctx: GokeExecutionContext) {
     .map((entry) => entry.trim())
     .filter(Boolean)
   for (const entry of models) {
-    const slash = entry.indexOf('/')
-    const provider = entry.slice(0, Math.max(slash, 0))
-    if (slash <= 0 || !isProviderId(provider)) {
-      fail(
-        ctx,
-        `Invalid preset entry "${entry}". Use provider/model with provider one of: ${PROVIDER_IDS.join(', ')}`,
-      )
-    }
+    if (parsePresetEntry(entry)) continue
+    fail(
+      ctx,
+      `Invalid preset entry "${entry}". Use provider/model or provider/model#variant with provider one of: ${PROVIDER_IDS.join(', ')}`,
+    )
   }
   if (models.length === 0) fail(ctx, 'Preset needs at least one provider/model entry')
   return models
@@ -579,22 +577,23 @@ cli
     dedent`
       Create (or overwrite) a preset: an ordered list of \`provider/model\`
       entries that subrouter falls through when subscriptions hit limits.
-      Model IDs are validated against models.dev before saving.
+      Append \`#variant\` to pin reasoning effort, for example \`openai/gpt-5.5#high\`.
+      Model IDs and variants are validated against models.dev before saving.
       Use the preset in opencode as model \`subrouter/<name>\`.
     `,
   )
-  .option('--models [models]', z.string().optional().describe('Comma-separated provider/model entries, ranked'))
+  .option('--models [models]', z.string().optional().describe('Comma-separated provider/model entries, ranked. Append #variant to pin reasoning effort'))
   .option('--force', 'Overwrite an existing preset without confirmation')
-  .example("subrouter preset create work --models 'anthropic/claude-opus-4-6,openai/gpt-5.5,xai/grok-4.6'")
+  .example("subrouter preset create work --models 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high,xai/grok-4.6'")
   .action(async (name, options, ctx) => {
     const raw = await (async () => {
       if (options.models) return options.models
       if (isAgent || !process.stdin.isTTY) {
-        fail(ctx, "Missing --models. Usage: subrouter preset create work --models 'anthropic/claude-opus-4-6,xai/grok-4.6'")
+        fail(ctx, "Missing --models. Usage: subrouter preset create work --models 'anthropic/claude-opus-4-6#max,xai/grok-4.6'")
       }
       const input = await clack.text({
         message: 'Ranked provider/model entries, comma separated',
-        placeholder: 'anthropic/claude-opus-4-6,openai/gpt-5.5,xai/grok-4.6',
+        placeholder: 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high,xai/grok-4.6',
       })
       if (clack.isCancel(input) || !input) exit(ctx, 0)
       return input

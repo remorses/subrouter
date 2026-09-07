@@ -116,7 +116,7 @@ The harness packages depend on `@subrouter/cli` with `workspace:^`.
 
 ## Config is implicit and machine-only
 
-Users never hand-edit config files. All state is created through the CLI (`subrouter login`, `subrouter preset create`). Do not add a user-facing editable config file. The `default` preset is built in: a hardcoded ranking of the newest model per provider, filtered to providers with accounts. A user preset named `default` overrides the builtin. Presets appear in both harnesses as `subrouter/<name>`.
+Users never hand-edit config files. All state is created through the CLI (`subrouter login`, `subrouter preset create`). Do not add a user-facing editable config file. The `default` preset is built in: a hardcoded ranking of the newest model per provider, filtered to providers with accounts. A user preset named `default` overrides the builtin. Presets appear in both harnesses as `subrouter/<name>`. Ranked entries may append `#variant` (`openai/gpt-5.5#high`). `preset create` validates that variant against models.dev `reasoning_options`. A harness session variant still wins over the preset pin.
 
 ## Cooldowns are global machine scope
 
