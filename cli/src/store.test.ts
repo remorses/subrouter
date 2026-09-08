@@ -6,6 +6,7 @@ import {
   accountKey,
   accountLabel,
   addAccount,
+  authFilePath,
   configFilePath,
   cooldownKey,
   isCoolingDown,
@@ -24,7 +25,7 @@ import {
   writeJson,
   type StoredAccount,
 } from './store.ts'
-import { configJsonSchema, SCHEMA_URL } from './schemas.ts'
+import { AUTH_SCHEMA_URL, authJsonSchema, CONFIG_SCHEMA_URL, configJsonSchema } from './schemas.ts'
 
 let home: string
 
@@ -125,18 +126,42 @@ describe('accounts', () => {
       [
         "$schema",
         "version",
-        "providers",
         "presets",
         "cooldowns",
         "routes",
+      ]
+    `)
+  })
+
+  test('JSON schema exposes the auth fields', () => {
+    expect(Object.keys(authJsonSchema.properties ?? {})).toMatchInlineSnapshot(`
+      [
+        "$schema",
+        "version",
+        "providers",
         "logins",
       ]
     `)
   })
 
-  test('writes $schema on config.json', async () => {
+  test('writes $schema on config.json and auth.json', async () => {
     await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
-    expect(JSON.parse(await readFile(configFilePath(), 'utf8')).$schema).toBe(SCHEMA_URL)
+    await savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })
+    expect(JSON.parse(await readFile(configFilePath(), 'utf8')).$schema).toBe(CONFIG_SCHEMA_URL)
+    expect(JSON.parse(await readFile(authFilePath(), 'utf8')).$schema).toBe(AUTH_SCHEMA_URL)
+  })
+
+  test('keeps tokens in auth.json and presets in config.json', async () => {
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })
+    const config = JSON.parse(await readFile(configFilePath(), 'utf8'))
+    const auth = JSON.parse(await readFile(authFilePath(), 'utf8'))
+    expect(config.providers).toBeUndefined()
+    expect(config.logins).toBeUndefined()
+    expect(config.presets.work).toEqual(['anthropic/claude-opus-4-6'])
+    expect(auth.providers.anthropic.accounts[0].email).toBe('a@x.com')
+    expect(auth.providers.anthropic.accounts[0].refresh).toBe('refresh-1')
+    expect(auth.presets).toBeUndefined()
   })
 
   test('merges split 0.3.0 state files into config.json on first load', async () => {
@@ -189,10 +214,43 @@ describe('accounts', () => {
       account: oauthAccount({ refresh: 'x-refresh', access: 'x-access', email: 'x@x.com' }),
     })
     const config = JSON.parse(await readFile(configFilePath(), 'utf8'))
-    expect(config.providers.anthropic.accounts[0].email).toBe('a@x.com')
-    expect(config.providers['opencode-go'].accounts[0].key).toBe('go-key')
+    const auth = JSON.parse(await readFile(authFilePath(), 'utf8'))
+    expect(auth.providers.anthropic.accounts[0].email).toBe('a@x.com')
+    expect(auth.providers['opencode-go'].accounts[0].key).toBe('go-key')
     expect(config.presets.work).toEqual(['anthropic/claude-opus-4-6', 'opencode-go/grok-4.6'])
-    expect((await readdir(home)).sort()).toEqual(['config.json'])
+    expect(config.providers).toBeUndefined()
+    expect((await readdir(home)).sort()).toEqual(['auth.json', 'config.json'])
+  })
+
+  test('splits a combined config.json into auth.json on first write', async () => {
+    await writeFile(
+      configFilePath(),
+      JSON.stringify({
+        version: 1,
+        providers: {
+          anthropic: { activeIndex: 0, accounts: [oauthAccount({ email: 'a@x.com' })] },
+        },
+        presets: { work: ['anthropic/claude-opus-4-6'] },
+        cooldowns: { 'anthropic:a@x.com': Date.now() + 60_000 },
+        routes: {},
+        logins: {
+          openai: { provider: 'openai', status: 'pending', url: 'https://auth.openai.com/example' },
+        },
+      }) + '\n',
+    )
+
+    expect((await loadAccounts()).providers.anthropic?.accounts[0]?.email).toBe('a@x.com')
+    expect((await loadPresets()).presets.work).toEqual(['anthropic/claude-opus-4-6'])
+    expect((await loadLoginState('openai'))?.status).toBe('pending')
+
+    await savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })
+    const config = JSON.parse(await readFile(configFilePath(), 'utf8'))
+    const auth = JSON.parse(await readFile(authFilePath(), 'utf8'))
+    expect(config.providers).toBeUndefined()
+    expect(config.logins).toBeUndefined()
+    expect(auth.providers.anthropic.accounts[0].email).toBe('a@x.com')
+    expect(auth.logins.openai.status).toBe('pending')
+    expect(config.presets.work).toEqual(['anthropic/claude-opus-4-6'])
   })
 
   test('adding an account clears the provider login state', async () => {

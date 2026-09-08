@@ -1,7 +1,13 @@
 // Public API of the subrouter package: stores, routing engine and adapters.
 export * from './store.ts'
 export * from './router.ts'
-export { SCHEMA_URL, configJsonSchema } from './schemas.ts'
+export {
+  AUTH_SCHEMA_URL,
+  CONFIG_SCHEMA_URL,
+  SCHEMA_URL,
+  authJsonSchema,
+  configJsonSchema,
+} from './schemas.ts'
 export {
   adapters,
   classifyFailure,

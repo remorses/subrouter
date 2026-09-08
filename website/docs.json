@@ -48,6 +48,6 @@
       }
     ]
   },
-  "knownPaths": ["/schema.json"],
+  "knownPaths": ["/schema.json", "/config.schema.json", "/auth.schema.json"],
   "decorativeLines": "none"
 }

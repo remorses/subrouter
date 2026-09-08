@@ -1,15 +1,17 @@
 /**
  * Subrouter local state: accounts, login attempts, presets and cooldowns.
  *
- * Everything lives in ~/.subrouter/config.json (override with SUBROUTER_HOME,
- * used by tests). The file is atomically replaced JSON with 0600 permissions
- * and a lock directory for cross-process safety. Cooldown state is global on
+ * Auth lives in ~/.subrouter/auth.json. Presets, cooldowns, and live routes
+ * live in ~/.subrouter/config.json (override with SUBROUTER_HOME, used by
+ * tests). Both files are atomically replaced JSON with 0600 permissions and
+ * a lock directory for cross-process safety. Cooldown state is global on
  * purpose: when a subscription hits a rate limit, every process and harness
  * on the machine should stop retrying it until the cooldown expires.
- * In-flight session routes are stored here too, so /model and the OpenCode
- * system prompt can read the live provider/model from another process.
- * 0.3.0 used accounts.json, presets.json, state.json, and login-*.json.
- * Those files are read until the next write, then replaced by config.json.
+ * In-flight session routes are stored in config.json, so /model and the
+ * OpenCode system prompt can read the live provider/model from another
+ * process. Combined config.json files from 0.5.0 are split on the next
+ * write. 0.3.0 used accounts.json, presets.json, state.json, and
+ * login-*.json. Those files are read until the next write, then replaced.
  * Provider id `opencode` is copied to `opencode-go` on that load.
  */
 
@@ -19,9 +21,11 @@ import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  AUTH_SCHEMA_URL,
+  CONFIG_SCHEMA_URL,
   PROVIDER_IDS,
-  SCHEMA_URL,
   type AccountsFile,
+  type AuthFile,
   type ConfigFile,
   type LoginState,
   type PresetsFile,
@@ -34,6 +38,7 @@ import {
 export {
   PROVIDER_IDS,
   type AccountsFile,
+  type AuthFile,
   type ConfigFile,
   type LoginState,
   type PresetsFile,
@@ -42,6 +47,17 @@ export {
   type StateFile,
   type StoredAccount,
 }
+
+type StoreState = {
+  version: 1
+  providers: AuthFile['providers']
+  logins: AuthFile['logins']
+  presets: ConfigFile['presets']
+  cooldowns: ConfigFile['cooldowns']
+  routes: ConfigFile['routes']
+}
+
+type CombinedRaw = Partial<StoreState>
 
 export function isProviderId(value: string): value is ProviderId {
   return PROVIDER_IDS.some((provider) => provider === value)
@@ -69,6 +85,17 @@ export function configFilePath() {
   return path.join(subrouterHome(), 'config.json')
 }
 
+export function authFilePath() {
+  return path.join(subrouterHome(), 'auth.json')
+}
+
+function schemaForFile(filePath: string) {
+  const name = path.basename(filePath)
+  if (name === 'config.json') return CONFIG_SCHEMA_URL
+  if (name === 'auth.json') return AUTH_SCHEMA_URL
+  return null
+}
+
 // --- JSON I/O ---
 
 export async function readJson<T>(filePath: string, fallback: T): Promise<T> {
@@ -86,7 +113,8 @@ export async function writeJson(filePath: string, value: object) {
     `.${path.basename(filePath)}.${process.pid}.${crypto.randomUUID()}.tmp`,
   )
   await fs.mkdir(directory, { recursive: true })
-  const payload = path.basename(filePath) === 'config.json' ? { $schema: SCHEMA_URL, ...value } : value
+  const schema = schemaForFile(filePath)
+  const payload = schema ? { $schema: schema, ...value } : value
 
   try {
     const temporaryFile = await fs.open(temporaryPath, 'wx', 0o600)
@@ -172,8 +200,8 @@ function normalizeProviderAccounts(input: Partial<ProviderAccounts> | undefined)
   return { activeIndex, accounts }
 }
 
-function normalizeProviders(input: Partial<ConfigFile['providers']> | undefined): ConfigFile['providers'] {
-  const providers: ConfigFile['providers'] = {}
+function normalizeProviders(input: Partial<AuthFile['providers']> | undefined): AuthFile['providers'] {
+  const providers: AuthFile['providers'] = {}
   for (const id of PROVIDER_IDS) {
     const entry = input?.[id]
     if (!entry) continue
@@ -217,8 +245,8 @@ function normalizeRoutes(input: Partial<ConfigFile['routes']> | undefined): Conf
   return routes
 }
 
-function normalizeLogins(input: Partial<ConfigFile['logins']> | undefined): ConfigFile['logins'] {
-  const logins: ConfigFile['logins'] = {}
+function normalizeLogins(input: Partial<AuthFile['logins']> | undefined): AuthFile['logins'] {
+  const logins: AuthFile['logins'] = {}
   for (const id of PROVIDER_IDS) {
     const entry = input?.[id]
     if (!entry || typeof entry !== 'object') continue
@@ -258,7 +286,7 @@ function remapOpencodeCooldowns(input: Partial<ConfigFile['cooldowns']> | undefi
   return cooldowns
 }
 
-async function loadLegacyConfig(): Promise<Partial<ConfigFile> | null> {
+async function loadLegacyConfig(): Promise<CombinedRaw | null> {
   const accounts = await readJson<Partial<AccountsFile> | null>(
     path.join(subrouterHome(), 'accounts.json'),
     null,
@@ -282,7 +310,7 @@ async function loadLegacyConfig(): Promise<Partial<ConfigFile> | null> {
   }
 }
 
-function configFromRaw(raw: Partial<ConfigFile> | null): ConfigFile {
+function storeFromRaw(raw: CombinedRaw | null): StoreState {
   return {
     version: 1,
     providers: normalizeProviders(takeOpencodeGo(raw?.providers)),
@@ -293,10 +321,19 @@ function configFromRaw(raw: Partial<ConfigFile> | null): ConfigFile {
   }
 }
 
-async function loadConfigUnlocked(): Promise<ConfigFile> {
-  const raw = await readJson<Partial<ConfigFile> | null>(configFilePath(), null)
-  if (raw) return configFromRaw(raw)
-  return configFromRaw(await loadLegacyConfig())
+async function loadStoreUnlocked(): Promise<StoreState> {
+  const auth = await readJson<Partial<AuthFile> | null>(authFilePath(), null)
+  const config = await readJson<CombinedRaw | null>(configFilePath(), null)
+  if (auth || config) {
+    return storeFromRaw({
+      providers: auth?.providers ?? config?.providers,
+      logins: auth?.logins ?? config?.logins,
+      presets: config?.presets,
+      cooldowns: config?.cooldowns,
+      routes: config?.routes,
+    })
+  }
+  return storeFromRaw(await loadLegacyConfig())
 }
 
 async function removeLegacyStateFiles() {
@@ -314,27 +351,30 @@ async function removeLegacyStateFiles() {
   )
 }
 
-async function saveConfigUnlocked(file: ConfigFile) {
-  await writeJson(configFilePath(), {
+async function saveStoreUnlocked(file: StoreState) {
+  await writeJson(authFilePath(), {
     version: 1,
     providers: file.providers,
+    logins: file.logins,
+  })
+  await writeJson(configFilePath(), {
+    version: 1,
     presets: file.presets,
     cooldowns: file.cooldowns,
     routes: file.routes,
-    logins: file.logins,
   })
   await removeLegacyStateFiles()
 }
 
 export async function loadAccounts(): Promise<AccountsFile> {
-  const config = await loadConfigUnlocked()
+  const config = await loadStoreUnlocked()
   return { version: 1, providers: config.providers }
 }
 
 export async function saveAccounts(file: AccountsFile) {
-  const config = await loadConfigUnlocked()
+  const config = await loadStoreUnlocked()
   config.providers = file.providers
-  await saveConfigUnlocked(config)
+  await saveStoreUnlocked(config)
 }
 
 /** Stable identity key for an account, used for cooldowns and dedupe. */
@@ -385,12 +425,12 @@ export async function addAccount({
   account: StoredAccount
 }) {
   await withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     const pool = config.providers[provider] ?? { activeIndex: 0, accounts: [] }
     upsertAccount(pool, account)
     config.providers[provider] = pool
     delete config.logins[provider]
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
   })
 }
 
@@ -405,7 +445,7 @@ export async function updateAccount({
   update: Partial<StoredAccount>
 }) {
   await withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     const pool = config.providers[provider]
     if (!pool) return
     const key = accountKey(match)
@@ -417,7 +457,7 @@ export async function updateAccount({
     const existing = pool.accounts[index]
     if (!existing) return
     pool.accounts[index] = { ...existing, ...update, lastUsed: Date.now() }
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
   })
 }
 
@@ -429,7 +469,7 @@ export async function removeAccount({
   index: number
 }): Promise<StoreError | StoredAccount> {
   return withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     const pool = config.providers[provider]
     if (!pool || index < 0 || index >= pool.accounts.length) {
       return new StoreError({ reason: `account ${index + 1} does not exist for ${provider}` })
@@ -437,7 +477,7 @@ export async function removeAccount({
     const [removed] = pool.accounts.splice(index, 1)
     if (pool.activeIndex > index) pool.activeIndex -= 1
     if (pool.activeIndex >= pool.accounts.length) pool.activeIndex = 0
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
     return removed!
   })
 }
@@ -459,7 +499,7 @@ export async function orderAccounts({
   emails: string[]
 }): Promise<StoreError | StoredAccount[]> {
   return withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     const pool = config.providers[provider]
     if (!pool || pool.accounts.length === 0) {
       return new StoreError({ reason: `no accounts for ${provider}. Run: subrouter login ${provider}` })
@@ -488,36 +528,36 @@ export async function orderAccounts({
     }
     pool.accounts = wanted.map((email) => byEmail.get(email)!)
     pool.activeIndex = 0
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
     return pool.accounts
   })
 }
 
 export async function loadPresets(): Promise<PresetsFile> {
-  const config = await loadConfigUnlocked()
+  const config = await loadStoreUnlocked()
   return { version: 1, presets: config.presets }
 }
 
 export async function savePreset({ name, models }: { name: string; models: string[] }) {
   await withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     config.presets[name] = models
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
   })
 }
 
 export async function removePreset(name: string): Promise<StoreError | null> {
   return withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     if (!config.presets[name]) return new StoreError({ reason: `preset ${name} does not exist` })
     delete config.presets[name]
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
     return null
   })
 }
 
 export async function loadState(): Promise<StateFile> {
-  const config = await loadConfigUnlocked()
+  const config = await loadStoreUnlocked()
   return { version: 1, cooldowns: config.cooldowns }
 }
 
@@ -535,24 +575,24 @@ export async function markCooldown({
   untilMs: number
 }) {
   await withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     const key = cooldownKey({ provider, account })
     const existing = config.cooldowns[key]
     config.cooldowns[key] = Math.max(existing ?? 0, untilMs)
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
   })
 }
 
 export async function clearCooldowns() {
   await withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     config.cooldowns = {}
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
   })
 }
 
 export async function getLiveRoute(sessionID: string) {
-  const config = await loadConfigUnlocked()
+  const config = await loadStoreUnlocked()
   return config.routes[sessionID] ?? null
 }
 
@@ -568,7 +608,7 @@ export async function setLiveRoute({
   modelId: string
 }) {
   await withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     const existing = config.routes[sessionID]
     if (
       existing &&
@@ -579,16 +619,16 @@ export async function setLiveRoute({
       return
     }
     config.routes[sessionID] = { preset, provider, modelId }
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
   })
 }
 
 export async function clearLiveRoute(sessionID: string) {
   await withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     if (!config.routes[sessionID]) return
     delete config.routes[sessionID]
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
   })
 }
 
@@ -608,22 +648,22 @@ export function isCoolingDown({
 }
 
 export async function loadLoginState(provider: ProviderId): Promise<LoginState | null> {
-  const config = await loadConfigUnlocked()
+  const config = await loadStoreUnlocked()
   return config.logins[provider] ?? null
 }
 
 export async function saveLoginState(state: LoginState) {
   await withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     config.logins[state.provider] = state
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
   })
 }
 
 export async function clearLoginState(provider: ProviderId) {
   await withStoreLock(async () => {
-    const config = await loadConfigUnlocked()
+    const config = await loadStoreUnlocked()
     delete config.logins[provider]
-    await saveConfigUnlocked(config)
+    await saveStoreUnlocked(config)
   })
 }
