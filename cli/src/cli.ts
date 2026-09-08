@@ -4,10 +4,14 @@
  * Accounts and presets are stored under ~/.subrouter. The opencode plugin
  * (@subrouter/opencode) reads the same files, so anything configured here is
  * picked up by opencode sessions using the `subrouter/<preset>` models.
+ * `import opencode` copies matching logins from OpenCode's auth.json.
  */
 
 import * as clack from '@clack/prompts'
+import * as errore from 'errore'
 import { colors, goke, isAgent, openInBrowser, type GokeExecutionContext } from 'goke'
+import os from 'node:os'
+import path from 'node:path'
 import { createRequire } from 'node:module'
 import { z } from 'zod'
 import dedent from 'string-dedent'
@@ -18,6 +22,8 @@ import {
   runLogin,
   validateModelsDevModelIds,
 } from './adapters/index.ts'
+import { extractOpenAIIdentity } from './adapters/openai.ts'
+import { extractXaiIdentity } from './adapters/xai.ts'
 import { builtinDefaultPreset, DEFAULT_PRESET_NAME, resolveCandidates, resolvePresetModels } from './router.ts'
 import {
   accountLabel,
@@ -38,6 +44,7 @@ import {
   savePreset,
   type LoginState,
   type ProviderId,
+  type StoredAccount,
 } from './store.ts'
 
 const require = createRequire(import.meta.url)
@@ -56,6 +63,88 @@ const LOGIN_TIMEOUT_MS = 35 * 60 * 1000
 
 function loginDaemonName(provider: ProviderId) {
   return `login ${provider}`
+}
+
+class ImportError extends errore.createTaggedError({
+  name: 'ImportError',
+  message: 'Could not import OpenCode logins: $reason',
+}) {}
+
+type OpencodeAuthEntry = {
+  type?: string
+  access?: string
+  refresh?: string
+  expires?: number
+  accountId?: string
+  key?: string
+}
+
+function defaultOpencodeAuthPath(env: { HOME?: string; XDG_DATA_HOME?: string }) {
+  const dataHome = env.XDG_DATA_HOME || path.join(env.HOME || os.homedir(), '.local/share')
+  return path.join(dataHome, 'opencode', 'auth.json')
+}
+
+function isOpencodeAuthFile(value: object): value is Record<string, OpencodeAuthEntry> {
+  if (Array.isArray(value)) return false
+  for (const entry of Object.values(value)) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return false
+  }
+  return true
+}
+
+function accountFromOpencodeAuth(entry: OpencodeAuthEntry, now: number): StoredAccount | null {
+  if (entry.type === 'oauth') {
+    if (typeof entry.access !== 'string' || typeof entry.refresh !== 'string') return null
+    return {
+      type: 'oauth',
+      access: entry.access,
+      refresh: entry.refresh,
+      expires: typeof entry.expires === 'number' ? entry.expires : now,
+      accountId: typeof entry.accountId === 'string' ? entry.accountId : undefined,
+      addedAt: now,
+      lastUsed: now,
+    }
+  }
+  if (entry.type === 'api') {
+    if (typeof entry.key !== 'string') return null
+    return {
+      type: 'api',
+      key: entry.key,
+      addedAt: now,
+      lastUsed: now,
+    }
+  }
+  return null
+}
+
+function withImportedIdentity({
+  provider,
+  account,
+}: {
+  provider: ProviderId
+  account: StoredAccount
+}): StoredAccount {
+  if (account.type !== 'oauth' || !account.access) return account
+  if (provider === 'openai') {
+    const identity = extractOpenAIIdentity({
+      access_token: account.access,
+      refresh_token: account.refresh ?? '',
+    })
+    return {
+      ...account,
+      email: identity.email || account.email,
+      accountId: identity.accountId || account.accountId,
+    }
+  }
+  if (provider === 'xai') {
+    const identity = extractXaiIdentity(account.access)
+    return {
+      ...account,
+      email: identity.email || account.email,
+      accountId: identity.accountId || account.accountId,
+    }
+  }
+  return account
 }
 
 function exit(ctx: GokeExecutionContext, code: number): never {
@@ -377,6 +466,68 @@ cli
       }
     }
     ctx.console.log(`Removed ${count} account(s) for ${id}`)
+  })
+
+cli
+  .command(
+    'import opencode',
+    dedent`
+      Copy matching subscription logins from OpenCode into Subrouter.
+
+      Useful when you already logged in through OpenCode. Subrouter reads
+      OpenCode auth.json and stores the same tokens in ~/.subrouter/auth.json.
+      Only providers Subrouter supports are imported. Existing accounts with the
+      same identity are updated instead of duplicated.
+
+      Check the result with: \`subrouter account list\`
+    `,
+  )
+  .option('--from [path]', z.string().optional().describe('OpenCode auth.json path'))
+  .example('subrouter import opencode')
+  .example('subrouter import opencode --from ~/.local/share/opencode/auth.json')
+  .action(async (options, ctx) => {
+    const fromPath = options.from?.trim()
+    const authPath = fromPath || defaultOpencodeAuthPath(ctx.process.env)
+    const raw = await ctx.fs.readFile(authPath, 'utf8').catch(
+      (cause) =>
+        new ImportError({
+          reason: fromPath
+            ? 'missing file passed to --from'
+            : 'missing OpenCode auth.json. Log in with OpenCode first, or pass --from <path>',
+          cause,
+        }),
+    )
+    if (raw instanceof Error) fail(ctx, raw.message)
+    if (typeof raw !== 'string') {
+      fail(ctx, new ImportError({ reason: 'OpenCode auth.json is not text' }).message)
+    }
+
+    const parsed = errore.try(() => JSON.parse(raw) as object)
+    if (parsed instanceof Error) {
+      fail(ctx, new ImportError({ reason: 'invalid JSON in OpenCode auth.json', cause: parsed }).message)
+    }
+    if (!parsed || typeof parsed !== 'object' || !isOpencodeAuthFile(parsed)) {
+      fail(ctx, new ImportError({ reason: 'OpenCode auth.json must be an object' }).message)
+    }
+
+    const now = Date.now()
+    const imported: string[] = []
+    for (const [provider, entry] of Object.entries(parsed)) {
+      if (!isProviderId(provider) || !entry) continue
+      const account = accountFromOpencodeAuth(entry, now)
+      if (!account) continue
+      await addAccount({
+        provider,
+        account: withImportedIdentity({ provider, account }),
+      })
+      imported.push(provider)
+    }
+
+    if (imported.length === 0) {
+      ctx.console.log('No matching OpenCode logins found.')
+      return
+    }
+    ctx.console.log(`Imported ${imported.join(', ')}`)
   })
 
 // --- account ---

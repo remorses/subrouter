@@ -1,7 +1,7 @@
 /** Exercises the published CLI entry against real local state. */
 
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { promisify } from 'node:util'
@@ -286,6 +286,120 @@ describe('account status', () => {
     expect((await loadAccounts()).providers['opencode-go']?.accounts).toMatchObject([
       { type: 'api', key: 'go-key-1' },
     ])
+  })
+})
+
+describe('import opencode', () => {
+  async function writeOpencodeAuth(auth: {
+    openai?: { type: 'oauth'; access: string; refresh: string; expires: number; accountId?: string }
+    xai?: { type: 'oauth'; access: string; refresh: string; expires: number }
+    'opencode-go'?: { type: 'api'; key: string }
+    groq?: { type: 'api'; key: string }
+  }) {
+    const authDir = path.join(home, '.local/share/opencode')
+    await mkdir(authDir, { recursive: true })
+    await writeFile(path.join(authDir, 'auth.json'), JSON.stringify(auth), { mode: 0o600 })
+  }
+
+  test('copies matching OpenCode logins and skips unrelated providers', async () => {
+    await writeOpencodeAuth({
+      openai: {
+        type: 'oauth',
+        access: 'openai-access',
+        refresh: 'openai-refresh',
+        expires: 1_700_000_000_000,
+        accountId: 'chatgpt-account',
+      },
+      'opencode-go': { type: 'api', key: 'go-key' },
+      groq: { type: 'api', key: 'groq-key' },
+    })
+
+    const result = await runCli('import', 'opencode')
+    expect(result.code).toBe(0)
+    expect(`${result.stdout}${result.stderr}`).not.toContain('openai-access')
+    expect(`${result.stdout}${result.stderr}`).not.toContain('openai-refresh')
+    expect(`${result.stdout}${result.stderr}`).not.toContain('go-key')
+    expect(result.stdout).toContain('openai')
+    expect(result.stdout).toContain('opencode-go')
+    expect(result.stdout).not.toContain('groq')
+
+    const accounts = await loadAccounts()
+    expect(accounts.providers.openai?.accounts).toMatchObject([
+      {
+        type: 'oauth',
+        access: 'openai-access',
+        refresh: 'openai-refresh',
+        expires: 1_700_000_000_000,
+        accountId: 'chatgpt-account',
+      },
+    ])
+    expect(accounts.providers['opencode-go']?.accounts).toMatchObject([{ type: 'api', key: 'go-key' }])
+    expect(accounts.providers.anthropic).toBeUndefined()
+  })
+
+  test('updates an existing account with the same OpenCode identity', async () => {
+    await addAccount({
+      provider: 'openai',
+      account: {
+        type: 'oauth',
+        access: 'old-access',
+        refresh: 'old-refresh',
+        expires: 1,
+        accountId: 'chatgpt-account',
+        email: 'tommy@example.com',
+        addedAt: 1,
+        lastUsed: 1,
+      },
+    })
+    await writeOpencodeAuth({
+      openai: {
+        type: 'oauth',
+        access: 'new-access',
+        refresh: 'new-refresh',
+        expires: 2,
+        accountId: 'chatgpt-account',
+      },
+    })
+
+    const result = await runCli('import', 'opencode')
+    expect(result.code).toBe(0)
+    expect((await loadAccounts()).providers.openai?.accounts).toMatchObject([
+      {
+        type: 'oauth',
+        access: 'new-access',
+        refresh: 'new-refresh',
+        expires: 2,
+        accountId: 'chatgpt-account',
+        email: 'tommy@example.com',
+      },
+    ])
+  })
+
+  test('reads --from when OpenCode auth is not in the default path', async () => {
+    const customPath = path.join(home, 'custom-auth.json')
+    await writeFile(
+      customPath,
+      JSON.stringify({
+        xai: {
+          type: 'oauth',
+          access: 'xai-access',
+          refresh: 'xai-refresh',
+          expires: 3,
+        },
+      }),
+    )
+
+    const result = await runCli('import', 'opencode', '--from', customPath)
+    expect(result.code).toBe(0)
+    expect((await loadAccounts()).providers.xai?.accounts).toMatchObject([
+      { type: 'oauth', access: 'xai-access', refresh: 'xai-refresh', expires: 3 },
+    ])
+  })
+
+  test('fails when OpenCode auth is missing', async () => {
+    const result = await runCli('import', 'opencode')
+    expect(result.code).toBe(1)
+    expect(result.stderr).toContain('auth.json')
   })
 })
 

@@ -36,6 +36,14 @@ npx @subrouter/cli login alibaba
 
 Run the same command again to add another account from the same provider. Subrouter rotates through those accounts before moving to the next provider.
 
+If you already logged in through **OpenCode**, copy those tokens instead of logging in again:
+
+```bash
+npx @subrouter/cli import opencode
+```
+
+This reads OpenCode `auth.json` and writes matching accounts into `~/.subrouter/auth.json`. Only providers Subrouter supports are imported. Existing accounts with the same identity are updated. The auth file schema is at [auth.schema.json](https://subrouter.org/auth.schema.json).
+
 ### 2. Check your setup
 
 ```bash
@@ -114,7 +122,7 @@ A preset is an ordered list of `provider/model` candidates. Subrouter skips cand
 
 ### Accounts
 
-Accounts live in `~/.subrouter/config.json`. Log in **multiple times to the same provider** to build a rotation pool.
+Accounts live in `~/.subrouter/auth.json`. Log in **multiple times to the same provider** to build a rotation pool.
 
 ### Cooldowns
 
@@ -193,6 +201,7 @@ npm i -g @subrouter/cli
 
 ```bash
 npx @subrouter/cli login [provider] [--input value] # add a subscription to the pool
+npx @subrouter/cli import opencode [--from path]    # copy matching OpenCode logins
 npx @subrouter/cli logout [provider] [--force]      # remove all accounts for a provider
 npx @subrouter/cli account list [--json]     # accounts + cooldown status
 npx @subrouter/cli account status [provider] # exits 1 until login completes
@@ -202,9 +211,11 @@ npx @subrouter/cli account order --provider anthropic work@x.com personal@x.com
 
 `account list` numbers accounts from 1. Run `login` again with the same provider to add another account to its rotation pool. In a terminal, `login` with no provider shows a list to pick from.
 
+`import opencode` is for machines that **already have OpenCode logins**. It copies matching tokens from OpenCode `auth.json` into Subrouter. Use `--from` only when that file is not in the default OpenCode data directory.
+
 `account order` sets the fallback order inside one provider. Pass **every** account email. The first email is tried first.
 
-State lives in **`~/.subrouter/config.json`**. The file includes a `$schema` URL so editors can autocomplete fields: [schema.json](https://subrouter.org/schema.json).
+Tokens live in **`~/.subrouter/auth.json`**. Presets, cooldowns, and live routes live in **`~/.subrouter/config.json`**. Each file includes a `$schema` URL so editors can autocomplete fields: [auth.schema.json](https://subrouter.org/auth.schema.json) and [config.schema.json](https://subrouter.org/config.schema.json).
 
 ### Presets
 

@@ -39,10 +39,10 @@ Subrouter deliberately avoids that translation matrix. Reusing the harness's pro
 pnpm workspace, flat `./*` packages. **One root README only, no per-package READMEs.**
 
 - `cli/` — npm package `@subrouter/cli`. Everything lives here:
-  - `src/store.ts` — accounts, presets, cooldown, and login state in `~/.subrouter/config.json` (override: `SUBROUTER_HOME`). JSON, 0600, lock-dir locking.
+  - `src/store.ts` — accounts and login state in `~/.subrouter/auth.json`; presets, cooldowns, and live routes in `~/.subrouter/config.json` (override: `SUBROUTER_HOME`). JSON, 0600, lock-dir locking.
   - `src/adapters/` — one adapter per provider (login flow, token refresh, fetch wrapper, `createModel`). Shared failure classification in `adapters/index.ts`.
   - `src/router.ts` — `RouterModel` (AI SDK `LanguageModelV3`) + `createSubrouter` provider factory. Resolves a preset to ranked candidates, skips cooldowns, fails over on rotate-worthy errors.
-  - `src/cli.ts` — goke CLI (`login`, `logout`, `account`, `preset`, `status`, `cooldown clear`).
+  - `src/cli.ts` — goke CLI (`login`, `import opencode`, `logout`, `account`, `preset`, `status`, `cooldown clear`).
 - `opencode/` — npm package `@subrouter/opencode`. Plugin `config` hook injects a `subrouter` provider whose `npm` field is a `file://` URL to the bundled `provider.js`; every preset becomes a model (`subrouter/<preset>`). Visible provider name is `subrouter.org`. Model labels stay as preset names, while context limits and `experimental.chat.system.transform` follow the first live routed candidate. GPT candidates set a unique `gpt-*` `id` so OpenCode prefers `apply_patch` over `edit`/`write`; `createSubrouter` maps that id back to the preset. Only plugin initializers may be exported from `src/index.ts` (opencode calls every export as a plugin).
 - `pi/` — npm package `@subrouter/pi`. Registers one native Pi provider and one logical model per preset. It selects accounts, then delegates to Pi's built-in provider streams without translating events.
 - `website/` — Holocron docs site deployed to subrouter.org.
@@ -136,7 +136,7 @@ OpenCode does not throw a custom cooldown class into the provider. Rate limits a
 
 Adapters expose `beginLogin()` returning a `LoginSession`, not a blocking `login()`. Harnesses that cannot sit on a TTY (opencode's auth hook, and through it a Discord bot) need to show `url` + `instructions` immediately and finish later. `runLogin()` in `adapters/index.ts` is the blocking wrapper the CLI uses; never reintroduce a blocking `login` on the adapter interface.
 
-The CLI registers `login [provider]` plus one `login <provider>` command per provider so background attempts keep separate daemon PIDs. Login state lives in `config.json` under `logins.<provider>`, so different providers can log in concurrently. Every successful harness path calls `addAccount()`, which clears that provider's login state. Keep this invalidation centralized in the store; otherwise an old CLI error can mask a later harness login.
+The CLI registers `login [provider]` plus one `login <provider>` command per provider so background attempts keep separate daemon PIDs. Login state lives in `auth.json` under `logins.<provider>`, so different providers can log in concurrently. Every successful harness path calls `addAccount()`, which clears that provider's login state. Keep this invalidation centralized in the store; otherwise an old CLI error can mask a later harness login.
 
 Two contracts to protect:
 
