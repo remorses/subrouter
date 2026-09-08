@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { APICallError, type LanguageModelV3CallOptions } from '@ai-sdk/provider'
 import {
   AllCandidatesExhaustedError,
+  asOpenCodeRetryableError,
   createSubrouter,
   filterPresetModelsByInput,
   NoUsableAccountError,
@@ -547,6 +548,90 @@ describe('RouterModel failover', () => {
     expect(opencodeMock.requests.length).toBe(0)
     const state = await loadState()
     expect(Object.keys(state.cooldowns)).toEqual([])
+  })
+
+  test('asOpenCodeRetryableError wraps transport timeouts for OpenCode retry', () => {
+    const timeout = asOpenCodeRetryableError(new Error('The operation timed out'))
+    expect(APICallError.isInstance(timeout)).toBe(true)
+    if (!APICallError.isInstance(timeout)) throw timeout
+    expect(timeout).toMatchObject({ isRetryable: true, message: 'The operation timed out' })
+    expect(timeout.statusCode).toBeUndefined()
+
+    const abortedTimeout = asOpenCodeRetryableError(new Error('The operation was aborted due to timeout'))
+    expect(APICallError.isInstance(abortedTimeout)).toBe(true)
+    if (!APICallError.isInstance(abortedTimeout)) throw abortedTimeout
+    expect(abortedTimeout.isRetryable).toBe(true)
+
+    const undici = Object.assign(new Error('fetch failed'), { code: 'UND_ERR_CONNECT_TIMEOUT' })
+    const wrappedUndici = asOpenCodeRetryableError(undici)
+    expect(APICallError.isInstance(wrappedUndici)).toBe(true)
+
+    const named = new Error('headers never arrived')
+    named.name = 'TimeoutError'
+    expect(APICallError.isInstance(asOpenCodeRetryableError(named))).toBe(true)
+
+    const already = new APICallError({
+      message: 'The operation timed out',
+      url: 'https://api.example.com',
+      requestBodyValues: {},
+      isRetryable: false,
+    })
+    const forced = asOpenCodeRetryableError(already)
+    expect(APICallError.isInstance(forced)).toBe(true)
+    if (!APICallError.isInstance(forced)) throw forced
+    expect(forced.isRetryable).toBe(true)
+
+    const userAbort = asOpenCodeRetryableError(new DOMException('Aborted', 'AbortError'))
+    expect(APICallError.isInstance(userAbort)).toBe(false)
+
+    const wrappedAbort = new Error('The operation timed out', {
+      cause: new DOMException('Aborted', 'AbortError'),
+    })
+    expect(asOpenCodeRetryableError(wrappedAbort)).toBe(wrappedAbort)
+
+    const badRequest = new APICallError({
+      message: 'bad request',
+      url: 'https://api.example.com',
+      requestBodyValues: {},
+      statusCode: 400,
+      isRetryable: false,
+    })
+    expect(asOpenCodeRetryableError(badRequest)).toBe(badRequest)
+
+    const invalidTimeout = new APICallError({
+      message: 'Invalid timeout parameter',
+      url: 'https://api.example.com',
+      requestBodyValues: {},
+      statusCode: 400,
+      isRetryable: false,
+    })
+    expect(asOpenCodeRetryableError(invalidTimeout)).toBe(invalidTimeout)
+  })
+
+  test('transport timeouts throw a retryable APICallError without rotating', async () => {
+    const anthropicMock = await startChatSseServer({ writeBody: () => {} })
+    const opencodeMock = await startMockServer(() => chatCompletionOk('should not be reached'))
+    servers = [anthropicMock, opencodeMock]
+    process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    const model = new RouterModel({ preset: 'test' })
+    const result = await model
+      .doGenerate({ ...callOptions, abortSignal: AbortSignal.timeout(50) })
+      .catch((error: Error) => error)
+    expect(APICallError.isInstance(result)).toBe(true)
+    if (!APICallError.isInstance(result)) throw result
+    expect(result.isRetryable).toBe(true)
+    expect(result.message.toLowerCase()).toMatch(/timed out|timeout/)
+    expect(opencodeMock.requests.length).toBe(0)
+    expect(Object.keys((await loadState()).cooldowns)).toEqual([])
   })
 
   test('exhausted and cooling-down accounts throw a retryable 429', async () => {

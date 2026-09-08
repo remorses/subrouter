@@ -629,6 +629,39 @@ export function failureDetailsFromError(error: Error): FailureDetails {
   return { message: error instanceof Error ? error.message : String(error) }
 }
 
+const TIMEOUT_CODES = new Set([
+  'ETIMEDOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+])
+
+const TIMEOUT_MESSAGE =
+  /(?:^|\b)(?:the )?operation (?:timed out|was aborted due to timeout)\b|\b(?:request|response|connection|network|stream|read|connect|idle) (?:timeout|timed out|time out)\b|\betimedout\b/i
+
+function errorCode(error: Error) {
+  const code = Reflect.get(error, 'code')
+  return typeof code === 'string' ? code : undefined
+}
+
+// OpenCode retries APICallError.isRetryable. Plain "The operation timed out"
+// becomes UnknownError and the retry regex misses it. Detect here so the
+// router can wrap without rotating the account.
+export function isTransportTimeout(error: Error) {
+  const seen = new Set<Error>()
+  let current: Error | undefined = error
+  while (current) {
+    if (seen.has(current)) break
+    seen.add(current)
+    if (current.name === 'TimeoutError') return true
+    const code = errorCode(current)
+    if (code && TIMEOUT_CODES.has(code)) return true
+    if (TIMEOUT_MESSAGE.test(current.message)) return true
+    current = current.cause instanceof Error ? current.cause : undefined
+  }
+  return false
+}
+
 export function classifyFailure({ statusCode: status, headers, message, body = '' }: FailureDetails): FailureAction | null {
   const text = `${message} ${body}`
   if (quotaExhaustedText(text)) {

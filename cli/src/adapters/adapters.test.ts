@@ -7,6 +7,7 @@ import {
   classifyFailure,
   emitLog,
   isPermanentRefreshFailure,
+  isTransportTimeout,
   loadModelsDevCatalog,
   modelsDevLimit,
   modelsDevModel,
@@ -175,6 +176,27 @@ describe('classifyFailure', () => {
         message: 'currently at capacity',
       }),
     ).toEqual({ rotate: true, cooldownMs: 15_000 })
+  })
+
+  test('timeouts do not rotate accounts', () => {
+    expect(classifyFailure({ message: 'The operation timed out' })).toBeNull()
+    expect(classifyFailure({ message: 'request ETIMEDOUT' })).toBeNull()
+  })
+})
+
+describe('isTransportTimeout', () => {
+  test('matches timeout names, codes, and messages', () => {
+    expect(isTransportTimeout(new Error('The operation timed out'))).toBe(true)
+    expect(isTransportTimeout(new Error('The operation was aborted due to timeout'))).toBe(true)
+    const named = new Error('headers never arrived')
+    named.name = 'TimeoutError'
+    expect(isTransportTimeout(named)).toBe(true)
+    const undici = Object.assign(new Error('fetch failed'), { code: 'UND_ERR_CONNECT_TIMEOUT' })
+    expect(isTransportTimeout(undici)).toBe(true)
+    expect(isTransportTimeout(new Error('fetch failed', { cause: named }))).toBe(true)
+    expect(isTransportTimeout(new DOMException('Aborted', 'AbortError'))).toBe(false)
+    expect(isTransportTimeout(new Error('bad request'))).toBe(false)
+    expect(isTransportTimeout(new Error('Invalid timeout parameter'))).toBe(false)
   })
 })
 

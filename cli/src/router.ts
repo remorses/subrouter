@@ -35,6 +35,7 @@ import {
   classifyFailure,
   emitLog,
   failureDetailsFromError,
+  isTransportTimeout,
   loadModelsDevCatalog,
   modelsDevInputModalities,
   modelsDevModel,
@@ -312,6 +313,26 @@ function cooldownRetryError({
     responseBody: message,
     isRetryable: true,
     cause,
+  })
+}
+
+// OpenCode MessageV2.fromError only retries APICallError. A raw timeout
+// becomes UnknownError and "operation timed out" misses the retry regex.
+export function asOpenCodeRetryableError(error: Error) {
+  const aborted: boolean = errore.isAbortError(error)
+  if (aborted) return error
+  if (APICallError.isInstance(error) && error.statusCode !== undefined) return error
+  if (!isTransportTimeout(error)) return error
+  if (APICallError.isInstance(error) && error.isRetryable) return error
+  return new APICallError({
+    message: error.message,
+    url: APICallError.isInstance(error) ? error.url : 'https://subrouter.local/timeout',
+    requestBodyValues: APICallError.isInstance(error) ? error.requestBodyValues : {},
+    statusCode: APICallError.isInstance(error) ? error.statusCode : undefined,
+    responseHeaders: APICallError.isInstance(error) ? error.responseHeaders : undefined,
+    responseBody: APICallError.isInstance(error) ? error.responseBody : undefined,
+    isRetryable: true,
+    cause: error,
   })
 }
 
@@ -612,7 +633,7 @@ export class RouterModel implements LanguageModelV3 {
 
       const error = inspected.error
       const action = classifyFailure(failureDetailsFromError(error))
-      if (!action) throw error
+      if (!action) throw asOpenCodeRetryableError(error)
 
       await markCooldown({
         provider: candidate.provider,
@@ -762,7 +783,7 @@ async function recordStreamCooldown({
 }) {
   const details = failureDetailsFromError(error)
   const action = classifyFailure(details)
-  if (!action) return error
+  if (!action) return asOpenCodeRetryableError(error)
   await markCooldown({
     provider: candidate.provider,
     account: candidate.account,
