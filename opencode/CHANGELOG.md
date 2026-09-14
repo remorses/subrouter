@@ -2,6 +2,20 @@
 
 # Changelog
 
+## 0.5.0
+
+1. **Pin reasoning effort from preset `#variant` entries.** OpenCode applies that pin on the live SDK unless the session already set `--variant` or `subrouter/<name>#high`. The plugin publishes the first live candidate's variants so the OpenCode picker can change effort per session. If the live fallback does not list that session variant, Subrouter uses the candidate pin or the provider default.
+
+2. **Show the in-flight routed model** through `resolveLiveModel({ preset, sessionID })`. The powered-by system line uses the provider/model that accepted the current run. After failover, later calls in the same session keep showing that fallback until idle.
+
+3. **Keep each user message on the subscription that accepted it.** Tool-result follow-ups stay on that provider, model, and account even if a higher-ranked subscription leaves cooldown mid-run.
+
+4. **Prefer `apply_patch` when Subrouter routes to GPT.** Presets that would otherwise look like `openai-only` now spoof a unique `gpt-*` API id so OpenCode hides `edit`/`write`. Custom agent prompts also get the apply_patch constraint when the live model is GPT.
+
+5. **Replay encrypted reasoning on Codex and Grok follow-up turns.** The plugin marks a preset as a reasoning model when the first live candidate is one, so thinking variants stay available. RouterModel copies Subrouter provider options onto the live SDK and requests `reasoning.encrypted_content` with `store: false`.
+
+6. **Persist cooldown fallback notices during the active run** using OpenCode's `noReply` and ignored-text pattern. The notice no longer races `session.idle` and cannot become the parent of another assistant turn.
+
 ## 0.4.0
 
 1. **Show when a message starts on a fallback model.** If the preferred subscription is already rate limited, OpenCode adds an ignored notice after the turn finishes:

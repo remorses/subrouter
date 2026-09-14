@@ -2,6 +2,18 @@
 
 # Changelog
 
+## 0.3.0
+
+1. **Pin reasoning effort from preset `#variant` entries.** Pi maps the same pin onto native `reasoning`. A session reasoning setting still wins over the preset pin.
+
+2. **Keep each user message on the subscription that accepted it.** Tool-result follow-ups stay on that provider, model, and account even if a higher-ranked subscription leaves cooldown mid-run.
+
+3. **Persist the in-flight route per session** so other processes can read the live model until the session goes idle.
+
+4. **Send `x-opencode-session` on OpenCode Go inference requests.** The plugin copies Pi's `sessionId` onto that header. Calls without a harness session id get a random UUID so the request still succeeds.
+
+5. **Force Responses `store: false`** on OpenAI and xAI so long Grok replies no longer fail with `Response is too large to store`.
+
 ## 0.2.1
 
 1. **Keep Claude Pro/Max OAuth requests on subscription usage.** The extension removes Pi's self-identifying system prompt and documentation block before Anthropic receives the request. The Claude Code identity block, tools, working directory, skills, and `--append-system-prompt` remain intact, so Anthropic no longer rejects the request as a third-party app that requires extra usage.

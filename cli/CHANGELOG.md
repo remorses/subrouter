@@ -2,6 +2,50 @@
 
 # Changelog
 
+## 0.6.0
+
+1. **Import matching OpenCode logins** instead of repeating `subrouter login` for every provider.
+
+   ```bash
+   npx @subrouter/cli import opencode
+   npx @subrouter/cli import opencode --from ~/.local/share/opencode/auth.json
+   ```
+
+   Only providers Subrouter supports are copied into `~/.subrouter/auth.json`. Existing accounts with the same identity are updated. The auth file schema is at https://subrouter.org/auth.schema.json.
+
+2. **Split tokens from runtime config.** Tokens now live in `~/.subrouter/auth.json`. Presets, cooldowns, and live routes stay in `~/.subrouter/config.json`. Older combined `config.json` files split on the next write.
+
+   Editors can autocomplete both files from `$schema`:
+
+   - https://subrouter.org/auth.schema.json
+   - https://subrouter.org/config.schema.json
+
+   https://subrouter.org/schema.json still serves the config schema.
+
+3. **Pin reasoning effort on preset entries with `#variant`.** `preset create` accepts ranked entries like `openai/gpt-5.5#high` and `anthropic/claude-opus-4-6#max`. Unknown or unsupported variants fail at create time against models.dev `reasoning_options`.
+
+   ```bash
+   npx @subrouter/cli preset create work --models 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high'
+   ```
+
+   A harness session `--variant` still wins over the preset pin. If the live fallback does not list that session variant, Subrouter uses the candidate pin or the provider default instead of sending an unsupported effort.
+
+4. **Keep each user message on the provider, model, and account that accepted it.** Tool-result follow-ups no longer jump back to a higher-ranked subscription when its cooldown expires mid-run. New user messages still start from the preset ranking.
+
+5. **Persist the in-flight route per session.** `resolveLiveModel({ preset, sessionID })` returns the provider/model that accepted the current run. After failover, later calls in the same session keep showing that fallback until the session goes idle.
+
+6. **Replay previous thinking on Codex and Grok follow-up turns.** RouterModel copies `providerOptions.subrouter` onto the live SDK (`openai` / `xai` / `anthropic`), forces Responses `store: false` on OpenAI and xAI, and asks for `reasoning.encrypted_content`. Long Grok replies no longer fail with `Response is too large to store`. Without the encrypted blob, Codex still drops summary-only thinking. That is required: `store: false` cannot point at `rs_*` ids.
+
+7. **Prefer OpenCode `apply_patch` when the live model is GPT.** GPT presets now spoof a unique `gpt-*` API id so OpenCode hides `edit`/`write` and loads the Codex system prompt. The provider maps that id back to the preset.
+
+8. **Send `x-opencode-session` on OpenCode Go inference requests.** RouterModel copies the harness session id onto that header. Calls without a harness session id get a random UUID so the request still succeeds.
+
+9. **Retry provider timeouts in OpenCode** instead of killing the session. Network failures such as `The operation timed out`, connect timeouts, and undici header/body timeouts are thrown as retryable `APICallError`s. Subrouter does not rotate or cool down on a timeout.
+
+10. **Shorten two cooldown defaults.** Balance / quota exhausted (`402`) now cools for **10 minutes** instead of 6 hours. Overloaded / at-capacity messages cool for **1 minute**. `retry-after` / `retry-after-ms` still win when the provider sends them. A normal `429` without those headers still defaults to 5 minutes.
+
+11. **Preserve structured provider stream errors** instead of displaying `[object Object]`. OpenAI Responses API errors keep their nested message so Subrouter can classify rate limits and report the real provider error.
+
 ## 0.5.0
 
 1. **Route media inputs only through compatible subscriptions.** Subrouter reads input modalities from models.dev and skips candidates that cannot accept the current prompt while preserving the configured ranking. A PDF request can now fail over from OpenAI without reaching a provider that cannot transport PDFs. Registered model metadata also preserves models.dev input-token limits.
