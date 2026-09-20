@@ -433,8 +433,18 @@ describe('opencode + subrouter provider', () => {
     expect(zenMock.requests.length).toBeGreaterThan(0)
   }, 120_000)
 
-  test('a pre-existing cooldown appends one ignored notice without another model turn', async () => {
+  test('a pre-existing cooldown shows one session toast without another model turn', async () => {
     const client = createOpencodeClient({ baseUrl: server.url })
+    const toasts: Array<{ message: string }> = []
+    const subscription = await client.event.subscribe({
+      query: { directory: projectDir },
+    })
+    void (async () => {
+      for await (const event of subscription.stream) {
+        if (event.type === 'tui.toast.show') toasts.push({ message: event.properties.message })
+      }
+    })()
+
     const session = await client.session.create({
       query: { directory: projectDir },
       body: { title: 'subrouter route notice' },
@@ -457,23 +467,22 @@ describe('opencode + subrouter provider', () => {
         .join('\n'),
     ).toContain('hello from fallback')
 
+    // The toast is session-scoped through the trailing session-id marker and never
+    // enters the transcript, so no extra user/assistant message and no extra model turn.
     await expect
-      .poll(async () => {
-        const messages = await client.session.messages({
-          path: { id: session.data!.id },
-          query: { directory: projectDir },
-        })
-        return (messages.data ?? []).filter(({ parts }) =>
-          parts.some((part) => part.type === 'text' && part.ignored === true),
-        ).length
-      })
+      .poll(() =>
+        toasts.filter(
+          ({ message }) =>
+            message.startsWith('Subrouter: Using ') && message.endsWith(session.data!.id),
+        ).length,
+      )
       .toBe(1)
 
     const messages = await client.session.messages({
       path: { id: session.data!.id },
       query: { directory: projectDir },
     })
-    expect((messages.data ?? []).filter(({ info }) => info.role === 'user')).toHaveLength(2)
+    expect((messages.data ?? []).filter(({ info }) => info.role === 'user')).toHaveLength(1)
     expect((messages.data ?? []).filter(({ info }) => info.role === 'assistant')).toHaveLength(1)
     expect(zenMock.requests).toHaveLength(requestsBefore + 1)
   }, 120_000)

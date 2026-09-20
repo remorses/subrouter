@@ -188,7 +188,7 @@ test('provider log callback forwards only to client.app.log', async () => {
   })
 })
 
-test('cooldown fallback persists one ignored notice during the active run', async () => {
+test('cooldown fallback shows one session-scoped toast during the active run', async () => {
   const requests: Array<{ path: string; body: Record<string, unknown> }> = []
   const server = createServer((req, res) => {
     const chunks: Buffer[] = []
@@ -214,7 +214,7 @@ test('cooldown fallback persists one ignored notice during the active run', asyn
   expect(onCooldownFallback).toBeTypeOf('function')
   if (typeof onCooldownFallback !== 'function') throw new Error('expected cooldown callback')
   const notice = {
-    sessionID: 'session-1',
+    sessionID: 'ses_session1',
     agent: 'build',
     variant: 'high',
     preset: 'work',
@@ -227,19 +227,11 @@ test('cooldown fallback persists one ignored notice during the active run', asyn
 
   expect(requests).toEqual([
     {
-      path: '/session/session-1/message?directory=%2Ftmp%2Fproject',
+      path: '/tui/show-toast?directory=%2Ftmp%2Fproject',
       body: {
-        noReply: true,
-        agent: 'build',
-        model: { providerID: 'subrouter', modelID: 'work' },
-        variant: 'high',
-        parts: [
-          {
-            type: 'text',
-            text: 'Subrouter: Using openai/gpt-5.6-sol because xai/grok-4.6 is rate limited.',
-            ignored: true,
-          },
-        ],
+        message:
+          'Subrouter: Using openai/gpt-5.6-sol because xai/grok-4.6 is rate limited. ses_session1',
+        variant: 'info',
       },
     },
   ])

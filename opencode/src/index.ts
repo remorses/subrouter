@@ -76,6 +76,13 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
   const affinity = new RouteAffinity()
   const activeMessages = new Map<string, string>()
   const deliveredNotices = new Map<string, { text: string; expiresAt: number }>()
+  // Surface the fallback as a TUI toast, the same channel OpenCode plugins use for
+  // notifications (see kimaki's legacy anthropic/openai/xai auth plugins). A toast is
+  // not persisted into the transcript, so it never becomes a fake user/assistant
+  // message or enters model context. tui.toast.show is a global event with no session
+  // field, so append the OpenCode session id at the end: kimaki routes the toast to
+  // the matching Discord thread by that marker and strips it before display. Plain
+  // OpenCode TUI just shows the toast for the active session.
   const onCooldownFallback = async (notice: CooldownFallbackNotice) => {
     if (!notice.sessionID || !notice.agent || notice.agent === 'title') return
     const preferred = `${notice.preferred.provider}/${notice.preferred.modelId}`
@@ -85,21 +92,13 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
     if (delivered?.text === text && delivered.expiresAt > Date.now()) return
     const current = { text, expiresAt: Date.now() + notice.preferred.retryAfterMs }
     deliveredNotices.set(notice.sessionID, current)
-    const body = {
-      noReply: true,
-      agent: notice.agent,
-      model: { providerID: PROVIDER_ID, modelID: notice.preset },
-      variant: notice.variant,
-      parts: [{ type: 'text' as const, text, ignored: true }],
-    }
-    const result = await client.session
-      .prompt({
-        path: { id: notice.sessionID },
+    const result = await client.tui
+      .showToast({
         query: { directory },
-        body,
+        body: { message: `${text} ${notice.sessionID}`, variant: 'info' },
         throwOnError: true,
       })
-      .catch((cause) => new Error('failed to persist cooldown fallback notice', { cause }))
+      .catch((cause) => new Error('failed to show cooldown fallback toast', { cause }))
     if (!(result instanceof Error)) return
     if (deliveredNotices.get(notice.sessionID) === current) {
       deliveredNotices.delete(notice.sessionID)
