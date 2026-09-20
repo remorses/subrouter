@@ -185,17 +185,27 @@ describe('anthropic login', () => {
     afterClose.cancel?.()
   })
 
-  test('concurrent manual sessions do not bind the localhost callback port', async () => {
-    const sessions = await Promise.all([
-      anthropicAdapter.beginLogin({ manualInput: true }),
-      anthropicAdapter.beginLogin({ manualInput: true }),
-    ])
-    for (const session of sessions) {
-      if (session instanceof Error) continue
-      session.cancel?.()
-    }
+  // Manual mode now also binds the localhost callback server so a browser on
+  // this machine finishes the login on its own, instead of dying on a
+  // dead-localhost error page the user must hand-copy a code out of.
+  test('manual sessions bind the callback server and fall back to paste when the port is taken', async () => {
+    const first = await anthropicAdapter.beginLogin({ manualInput: true })
+    if (first instanceof Error) throw first
+    expect(first.method).toBe('code')
 
-    expect(sessions.every((session) => !(session instanceof Error))).toBe(true)
+    // The port is taken, so an overlapping auto session (which has no other
+    // completion path) conflicts and errors.
+    const overlappingAuto = await anthropicAdapter.beginLogin()
+    expect(overlappingAuto).toBeInstanceOf(Error)
+
+    // An overlapping manual session cannot bind either, but degrades to
+    // paste-only instead of failing: its browser is remote anyway.
+    const overlappingManual = await anthropicAdapter.beginLogin({ manualInput: true })
+    if (overlappingManual instanceof Error) throw overlappingManual
+    expect(overlappingManual.method).toBe('code')
+
+    first.cancel?.()
+    overlappingManual.cancel?.()
   })
 
   // The callback server accepts any GET, so a redirect URL captured in a browser

@@ -266,12 +266,18 @@ async function resolveCallbackResult({
 
 async function beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> {
   const pkce = await generatePKCE()
-  const callbackServer = args?.manualInput
-    ? null
-    : await startCallbackServer(pkce.verifier).catch(
-        (e) => new AnthropicAuthError({ reason: 'failed to start callback server', cause: e }),
-      )
-  if (callbackServer instanceof Error) return callbackServer
+  // Always run the localhost callback server, even in manual mode. When the
+  // authorizing browser is on this machine the redirect lands here and the
+  // login finishes on its own, so the user never has to hand-copy a code out
+  // of a dead-localhost error page (the source of most "invalid or expired"
+  // failures). In manual mode a bind failure is not fatal: the browser is
+  // remote, so the user pastes the redirect URL instead. In auto mode the
+  // server is the only completion path, so a bind failure is fatal.
+  const startedServer = await startCallbackServer(pkce.verifier).catch(
+    (e) => new AnthropicAuthError({ reason: 'failed to start callback server', cause: e }),
+  )
+  if (startedServer instanceof Error && !args?.manualInput) return startedServer
+  const callbackServer = startedServer instanceof Error ? null : startedServer
 
   const authParams = new URLSearchParams({
     code: 'true',
@@ -289,7 +295,7 @@ async function beginLogin(args?: BeginLoginArgs): Promise<Error | LoginSession> 
   return {
     url: `https://claude.ai/oauth/authorize?${authParams.toString()}`,
     instructions: args?.manualInput
-      ? 'Authorize Claude Pro/Max in your browser, then paste the final redirect URL into this prompt, never a shared chat. Pasting just the authorization code also works.'
+      ? 'Authorize Claude Pro/Max in your browser. If the browser is on this machine the login finishes on its own; otherwise paste the final redirect URL into this prompt, never a shared chat. Pasting just the authorization code also works.'
       : callbackLoginInstructions({ subscription: 'Claude Pro/Max', redirectUri: REDIRECT_URI }),
     method: args?.manualInput ? 'code' : 'auto',
     complete(input) {
@@ -554,7 +560,12 @@ async function freshAccessToken({
       const tokens = await refreshAnthropicToken(refreshToken)
       if (tokens instanceof Error) {
         if (isPermanentRefreshFailure(tokens)) {
-          return new AnthropicAuthError({ reason: 'refresh token expired, re-login required', cause: tokens })
+          // Keep "re-login required" so classifyFailure rotates. Surface the
+          // source reason and the exact command so the fix is obvious.
+          return new AnthropicAuthError({
+            reason: `Claude subscription re-login required, run: subrouter login anthropic (${tokens.reason})`,
+            cause: tokens,
+          })
         }
         return tokens
       }

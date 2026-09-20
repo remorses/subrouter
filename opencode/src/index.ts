@@ -277,7 +277,8 @@ function toOpencodeCredentials(account: StoredAccount) {
   }
 }
 
-export const subrouterAuthPlugin: Plugin = async () => {
+export const subrouterAuthPlugin: Plugin = async ({ client }) => {
+  const log = opencodeLog(client)
   return {
     auth: {
       provider: PROVIDER_ID,
@@ -327,7 +328,18 @@ export const subrouterAuthPlugin: Plugin = async () => {
 
             const finish = async (input?: string) => {
               const account = await session.complete(input)
-              if (account instanceof Error) return { type: 'failed' as const }
+              if (account instanceof Error) {
+                // opencode's AuthOAuthResult has no failure-with-message
+                // variant, so the real reason cannot travel back through
+                // oauth.callback and harnesses show a generic fallback. Log it
+                // here so the cause is diagnosable instead of lost.
+                void log?.({
+                  level: 'error',
+                  message: `login failed: ${account.message}`,
+                  extra: { provider: providerId },
+                })
+                return { type: 'failed' as const }
+              }
               await addAccount({ provider: providerId, account })
               return toOpencodeCredentials(account)
             }
