@@ -298,6 +298,9 @@ describe('OpenAI Codex WebSocket transport', () => {
       fail: (socket: WebSocket) => socket.terminate(),
       message: 'closed before response completed (code 1006',
       statusCode: undefined,
+      // A 1006 drop is a transient transport failure, not a quota/auth
+      // rejection, so it must retry without cooling down the account.
+      cooldowns: [] satisfies string[],
     },
     {
       name: 'Grok-style 403',
@@ -314,8 +317,9 @@ describe('OpenAI Codex WebSocket transport', () => {
         ),
       message: 'run out of credits',
       statusCode: 403,
+      cooldowns: ['openai:account-b'],
     },
-  ])('marks $name retryable before semantic output', async ({ fail, message, statusCode }) => {
+  ])('marks $name retryable before semantic output', async ({ fail, message, statusCode, cooldowns }) => {
     const server = await startCodexServer(({ authorization, socket }) => {
       if (authorization !== 'Bearer access-b') {
         for (const event of completionEvents({ text: 'must not run', responseId: 'fallback-1' })) {
@@ -343,7 +347,7 @@ describe('OpenAI Codex WebSocket transport', () => {
     expect(error.statusCode).toBe(statusCode)
     expect(error.message).toContain(message)
     expect(server.connections.map((item) => item.authorization)).toEqual(['Bearer access-b'])
-    expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:account-b'])
+    expect(Object.keys((await loadState()).cooldowns)).toEqual(cooldowns)
   })
 
   test('does not retry a Grok-style 403 after visible output', async () => {
@@ -397,5 +401,41 @@ describe('OpenAI Codex WebSocket transport', () => {
     expect(parts.flatMap((part) => (part.type === 'text-delta' ? [part.delta] : []))).toEqual(['partial'])
     expect(server.connections.map((item) => item.authorization)).toEqual(['Bearer access-b'])
     expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:account-b'])
+  })
+
+  test('retries a WebSocket 1006 drop after visible output without cooling down', async () => {
+    // Unlike a quota/auth error, a transient 1006 drop is retryable even after
+    // output has started, so OpenCode restarts the turn on the same account.
+    const server = await startCodexServer(({ authorization, socket }) => {
+      if (authorization !== 'Bearer access-b') {
+        for (const event of completionEvents({ text: 'must not run', responseId: 'fallback-1' })) {
+          socket.send(JSON.stringify(event))
+        }
+        return
+      }
+      for (const event of completionEvents({ text: 'partial', responseId: 'partial-1' }).slice(0, 4)) {
+        socket.send(JSON.stringify(event))
+      }
+      setTimeout(() => socket.terminate(), 20)
+    })
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    await addAccount({ provider: 'openai', account: oauthAccount({ accountId: 'account-a', access: 'access-a' }) })
+    await addAccount({ provider: 'openai', account: oauthAccount({ accountId: 'account-b', access: 'access-b' }) })
+    await savePreset({ name: 'test', models: ['openai/gpt-test'] })
+
+    const result = await new RouterModel({ preset: 'test' }).doStream(callOptions)
+    const parts: LanguageModelV3StreamPart[] = []
+    const error = await (async () => {
+      for await (const part of result.stream) parts.push(part)
+    })().catch((cause) => cause as Error)
+    expect(APICallError.isInstance(error)).toBe(true)
+    if (!APICallError.isInstance(error)) throw error
+    expect(error.isRetryable).toBe(true)
+    expect(error.statusCode).toBeUndefined()
+    expect(error.message).toContain('closed before response completed (code 1006')
+    expect(parts.flatMap((part) => (part.type === 'text-delta' ? [part.delta] : []))).toEqual(['partial'])
+    expect(server.connections.map((item) => item.authorization)).toEqual(['Bearer access-b'])
+    expect(Object.keys((await loadState()).cooldowns)).toEqual([])
   })
 })

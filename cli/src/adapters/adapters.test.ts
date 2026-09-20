@@ -7,7 +7,9 @@ import {
   classifyFailure,
   emitLog,
   isPermanentRefreshFailure,
+  isTransientTransportError,
   isTransportTimeout,
+  isWebSocketDisconnect,
   loadModelsDevCatalog,
   modelsDevLimit,
   modelsDevModel,
@@ -122,12 +124,14 @@ describe('classifyFailure', () => {
     expect(classifyFailure({ statusCode: 400, body: 'bad request', message: 'bad request' })).toBeNull()
   })
 
-  test('OpenAI WebSocket connection loss rotates', () => {
+  test('OpenAI WebSocket 1006 drop is transient, not a rotate', () => {
+    // A code 1006 abnormal close is a transient network failure. It must not
+    // cool down or rotate the account; OpenCode retries the turn instead.
     expect(
       classifyFailure({
         message: 'OpenAI WebSocket failed: closed before response completed (code 1006: Connection ended)',
-      })?.rotate,
-    ).toBe(true)
+      }),
+    ).toBeNull()
     expect(
       classifyFailure({
         message: 'OpenAI WebSocket failed: closed before response completed (code 1008: Policy violation)',
@@ -197,6 +201,43 @@ describe('isTransportTimeout', () => {
     expect(isTransportTimeout(new DOMException('Aborted', 'AbortError'))).toBe(false)
     expect(isTransportTimeout(new Error('bad request'))).toBe(false)
     expect(isTransportTimeout(new Error('Invalid timeout parameter'))).toBe(false)
+    expect(
+      isTransportTimeout(
+        new Error('OpenAI WebSocket failed: closed before response completed (code 1006: Connection ended)'),
+      ),
+    ).toBe(false)
+  })
+})
+
+describe('isWebSocketDisconnect', () => {
+  test('matches only a code 1006 abnormal close', () => {
+    expect(
+      isWebSocketDisconnect(
+        new Error('OpenAI WebSocket failed: closed before response completed (code 1006: Connection ended)'),
+      ),
+    ).toBe(true)
+    const wrapped = new Error('stream error', {
+      cause: new Error('OpenAI WebSocket failed: closed before response completed (code 1006)'),
+    })
+    expect(isWebSocketDisconnect(wrapped)).toBe(true)
+    expect(
+      isWebSocketDisconnect(
+        new Error('OpenAI WebSocket failed: closed before response completed (code 1008: Policy violation)'),
+      ),
+    ).toBe(false)
+    expect(isWebSocketDisconnect(new Error('bad request'))).toBe(false)
+  })
+})
+
+describe('isTransientTransportError', () => {
+  test('covers both timeouts and WebSocket 1006 drops', () => {
+    expect(isTransientTransportError(new Error('The operation timed out'))).toBe(true)
+    expect(
+      isTransientTransportError(
+        new Error('OpenAI WebSocket failed: closed before response completed (code 1006: Connection ended)'),
+      ),
+    ).toBe(true)
+    expect(isTransientTransportError(new Error('bad request'))).toBe(false)
   })
 })
 

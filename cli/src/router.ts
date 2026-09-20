@@ -35,7 +35,7 @@ import {
   classifyFailure,
   emitLog,
   failureDetailsFromError,
-  isTransportTimeout,
+  isTransientTransportError,
   loadModelsDevCatalog,
   modelsDevInputModalities,
   modelsDevModel,
@@ -316,17 +316,17 @@ function cooldownRetryError({
   })
 }
 
-// OpenCode MessageV2.fromError only retries APICallError. A raw timeout
-// becomes UnknownError and "operation timed out" misses the retry regex.
+// OpenCode MessageV2.fromError only retries APICallError. A raw timeout or
+// WebSocket 1006 drop becomes UnknownError and the retry regex misses it.
 export function asOpenCodeRetryableError(error: Error) {
   const aborted: boolean = errore.isAbortError(error)
   if (aborted) return error
   if (APICallError.isInstance(error) && error.statusCode !== undefined) return error
-  if (!isTransportTimeout(error)) return error
+  if (!isTransientTransportError(error)) return error
   if (APICallError.isInstance(error) && error.isRetryable) return error
   return new APICallError({
     message: error.message,
-    url: APICallError.isInstance(error) ? error.url : 'https://subrouter.local/timeout',
+    url: APICallError.isInstance(error) ? error.url : 'https://subrouter.local/transient',
     requestBodyValues: APICallError.isInstance(error) ? error.requestBodyValues : {},
     statusCode: APICallError.isInstance(error) ? error.statusCode : undefined,
     responseHeaders: APICallError.isInstance(error) ? error.responseHeaders : undefined,

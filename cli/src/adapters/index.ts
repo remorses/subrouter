@@ -554,7 +554,6 @@ function rotateWorthyText(text: string) {
     haystack.includes('balance exhausted') ||
     haystack.includes('spending-limit') ||
     haystack.includes('run out of credits') ||
-    haystack.includes('openai websocket failed: closed before response completed (code 1006') ||
     haystack.includes('refresh token expired') ||
     haystack.includes('re-login required') ||
     haystack.includes('invalid api key') ||
@@ -660,6 +659,30 @@ export function isTransportTimeout(error: Error) {
     current = current.cause instanceof Error ? current.cause : undefined
   }
   return false
+}
+
+// The OpenAI Responses WebSocket transport can drop with code 1006 (abnormal
+// close, no close frame). That is a transient network failure like a timeout,
+// not a provider quota/auth rejection. Detect it so the router retries the turn
+// in OpenCode on the same account instead of rotating and cooling it down.
+const WEBSOCKET_DISCONNECT_MESSAGE = 'closed before response completed (code 1006'
+
+export function isWebSocketDisconnect(error: Error) {
+  const seen = new Set<Error>()
+  let current: Error | undefined = error
+  while (current) {
+    if (seen.has(current)) break
+    seen.add(current)
+    if (current.message.toLowerCase().includes(WEBSOCKET_DISCONNECT_MESSAGE)) return true
+    current = current.cause instanceof Error ? current.cause : undefined
+  }
+  return false
+}
+
+// Transient transport failures OpenCode should retry without rotating the
+// account: request timeouts and WebSocket 1006 disconnects.
+export function isTransientTransportError(error: Error) {
+  return isTransportTimeout(error) || isWebSocketDisconnect(error)
 }
 
 export function classifyFailure({ statusCode: status, headers, message, body = '' }: FailureDetails): FailureAction | null {

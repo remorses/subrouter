@@ -562,6 +562,19 @@ describe('RouterModel failover', () => {
     if (!APICallError.isInstance(abortedTimeout)) throw abortedTimeout
     expect(abortedTimeout.isRetryable).toBe(true)
 
+    const websocket = asOpenCodeRetryableError(
+      new Error('OpenAI WebSocket failed: closed before response completed (code 1006: Connection ended)'),
+    )
+    expect(APICallError.isInstance(websocket)).toBe(true)
+    if (!APICallError.isInstance(websocket)) throw websocket
+    expect(websocket.isRetryable).toBe(true)
+    expect(websocket.statusCode).toBeUndefined()
+
+    const policyClose = asOpenCodeRetryableError(
+      new Error('OpenAI WebSocket failed: closed before response completed (code 1008: Policy violation)'),
+    )
+    expect(APICallError.isInstance(policyClose)).toBe(false)
+
     const undici = Object.assign(new Error('fetch failed'), { code: 'UND_ERR_CONNECT_TIMEOUT' })
     const wrappedUndici = asOpenCodeRetryableError(undici)
     expect(APICallError.isInstance(wrappedUndici)).toBe(true)
