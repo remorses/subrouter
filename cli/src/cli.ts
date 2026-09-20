@@ -731,6 +731,9 @@ cli
       Append \`#variant\` to pin reasoning effort, for example \`openai/gpt-5.5#high\`.
       Model IDs and variants are validated against models.dev before saving.
       Use the preset in opencode as model \`subrouter/<name>\`.
+      If the top-ranked model is a GPT model, prefix the name with \`gpt-\`
+      (e.g. \`gpt-openai-first\`); OpenCode reads the preset name to pick the
+      apply_patch tool, so a GPT preset without the prefix gets edit/write.
     `,
   )
   .option('--models [models]', z.string().optional().describe('Comma-separated provider/model entries, ranked. Append #variant to pin reasoning effort'))
