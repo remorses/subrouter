@@ -36,7 +36,7 @@ const CLIENT_ID = (() => {
   return Buffer.from(encoded, 'base64').toString('utf8')
 })()
 
-const TOKEN_URL = 'https://platform.claude.com/v1/oauth/token'
+const TOKEN_URL_ENV_VAR = 'SUBROUTER_ANTHROPIC_TOKEN_URL'
 const CLIENT_DATA_URL = 'https://api.anthropic.com/api/oauth/claude_cli/client_data'
 const PROFILE_URL = 'https://api.anthropic.com/api/oauth/profile'
 const CALLBACK_PORT = 53692
@@ -47,7 +47,7 @@ const SCOPES =
 // 30 min: a login driven from a chat harness needs time for the human to see the
 // URL, solve hCaptcha and approve. Under 5 min the callback server dies first.
 const OAUTH_TIMEOUT_MS = 30 * 60 * 1000
-const CLAUDE_CODE_USER_AGENT = 'claude-cli/2.1.257 (external, cli)'
+const CLAUDE_CODE_USER_AGENT = 'claude-cli/2.1.280 (external, cli)'
 const CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
 
 const OPENCODE_IDENTITY = 'You are OpenCode, the best coding agent on the planet.'
@@ -96,9 +96,20 @@ function tokenExpiry(expiresIn: number) {
 }
 
 async function postTokenRequest(body: Record<string, string>): Promise<AnthropicAuthError | TokenData> {
-  const response = await fetch(TOKEN_URL, {
+  const tokenUrl = resolveBaseUrl({
+    envVar: TOKEN_URL_ENV_VAR,
+    fallback: 'https://platform.claude.com/v1/oauth/token',
+  })
+  // Always set user-agent. Inside OpenCode, Bun defaults it to `opencode/<version>`,
+  // and this endpoint answers that with a fake 429 rate_limit_error for every
+  // login and refresh. Standalone Bun/Node UAs get normal responses.
+  const response = await fetch(tokenUrl, {
     method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      'user-agent': CLAUDE_CODE_USER_AGENT,
+    },
     body: JSON.stringify(body),
   }).catch((e) => new AnthropicAuthError({ reason: 'token request failed', cause: e }))
   if (response instanceof Error) return response
@@ -635,7 +646,7 @@ function buildFetch({ account, persist }: { account: StoredAccount; persist: Per
 export const anthropicAdapter: ProviderAdapter = {
   id: 'anthropic',
   name: 'Anthropic (Claude Pro/Max)',
-  defaultModels: ['claude-opus-4-6', 'claude-sonnet-4-6'],
+  defaultModels: ['claude-opus-5-5', 'claude-sonnet-4-6'],
   baseUrlEnvVar: 'SUBROUTER_ANTHROPIC_BASE_URL',
   createModel({ modelId, account, persist }) {
     const provider = createAnthropic({

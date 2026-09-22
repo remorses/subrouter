@@ -67,6 +67,7 @@ const openServers: Server[] = []
 
 afterEach(async () => {
   delete process.env.SUBROUTER_OPENAI_ISSUER_URL
+  delete process.env.SUBROUTER_ANTHROPIC_TOKEN_URL
   for (const server of openServers.splice(0)) {
     await new Promise<void>((resolve) => {
       server.close(() => {
@@ -219,6 +220,38 @@ describe('anthropic login', () => {
     expect(session.instructions).toContain('curl')
     expect(session.instructions).toContain('http://localhost:53692/callback')
     expect(session.instructions).toContain('do not paste it into a shared chat')
+  })
+
+  // Inside OpenCode, Bun's default user-agent is `opencode/<version>`, and the
+  // Claude token endpoint answers that with a fake 429 rate_limit_error.
+  // Login exchange and refresh share postTokenRequest; refresh avoids the
+  // identity lookup that login does against the real api.anthropic.com.
+  test('token refresh sends the Claude Code user-agent', async () => {
+    const userAgents: Array<string | undefined> = []
+    const server = createServer((req, res) => {
+      userAgents.push(req.headers['user-agent'])
+      res.writeHead(200, { 'Content-Type': 'application/json', Connection: 'close' })
+      res.end(JSON.stringify({ access_token: 'access-1', refresh_token: 'refresh-2', expires_in: 3600 }))
+    })
+    openServers.push(server)
+    await new Promise<void>((resolve) => {
+      server.listen(0, '127.0.0.1', resolve)
+    })
+    const address = server.address()
+    if (typeof address === 'string' || !address) throw new Error('failed to bind fake token endpoint')
+    process.env.SUBROUTER_ANTHROPIC_TOKEN_URL = `http://127.0.0.1:${address.port}/v1/oauth/token`
+
+    const access = await anthropicAdapter.getApiKey({
+      account: { type: 'oauth', refresh: 'refresh-1', expires: 0, addedAt: 0, lastUsed: 0 },
+      persist: async () => {},
+    })
+    if (access instanceof Error) throw access
+
+    expect(userAgents).toMatchInlineSnapshot(`
+      [
+        "claude-cli/2.1.280 (external, cli)",
+      ]
+    `)
   })
 
   test('manualInput switches the flow to a pasted redirect URL', async () => {

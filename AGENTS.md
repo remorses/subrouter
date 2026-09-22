@@ -314,3 +314,11 @@ Verified with a real Claude Pro/Max + ChatGPT login (browser flows driven end to
 - anthropic PKCE login can hit an **hCaptcha** on the authorize click; the flow still completes after solving it. Identity endpoint returns the email.
 - openai Codex device-code flow works as ported from opencode.
 - A real cross-provider failover was observed: Codex returned "The usage limit has been reached" → account cooled down → the same request completed on anthropic. The classifier matches that message via the "usage limit" text check.
+
+## Default user-agent inside OpenCode (2026-09)
+
+Inside OpenCode, Bun's default `User-Agent` is `opencode/<version>`, not `Bun/…`. The Claude OAuth token endpoint (`platform.claude.com/v1/oauth/token`) answers that UA with a **fake 429** `rate_limit_error` for every login and refresh. The same request from standalone Bun or Node gets a normal response. Kimaki reported the failure as `Authorization code was invalid or expired`.
+
+- Always set an explicit `user-agent` on requests that providers might fingerprint. Never rely on the runtime default.
+- A 429 you cannot reproduce outside OpenCode is probably this. To check, fetch from a project plugin (`.opencode/plugins/*.ts`) through `opencode run` and log `req.rawHeaders` on a local echo server.
+- Kimaki's legacy anthropic plugin avoids the issue by sending token requests from a `node` child process, whose UA is `node`. The real cause is the UA, not process state.
