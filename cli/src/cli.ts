@@ -731,23 +731,25 @@ cli
       Append \`#variant\` to pin reasoning effort, for example \`openai/gpt-5.5#high\`.
       Model IDs and variants are validated against models.dev before saving.
       Use the preset in opencode as model \`subrouter/<name>\`.
-      If the top-ranked model is a GPT model, prefix the name with \`gpt-\`
-      (e.g. \`gpt-openai-first\`); OpenCode reads the preset name to pick the
-      apply_patch tool, so a GPT preset without the prefix gets edit/write.
+      If every candidate is a GPT model, prefix the name with \`gpt-\`
+      (e.g. \`gpt-sol\`). OpenCode v2 reads that public id to load the GPT
+      prompt and the patch tool. A GPT-only preset without the prefix gets
+      edit/write instead of apply_patch. Do not use the prefix when the
+      preset also falls back to Anthropic, xAI, or another provider.
     `,
   )
   .option('--models [models]', z.string().optional().describe('Comma-separated provider/model entries, ranked. Append #variant to pin reasoning effort'))
   .option('--force', 'Overwrite an existing preset without confirmation')
-  .example("subrouter preset create work --models 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high,xai/grok-4.6'")
+  .example("subrouter preset create work --models 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high,xai/grok-4.7'")
   .action(async (name, options, ctx) => {
     const raw = await (async () => {
       if (options.models) return options.models
       if (isAgent || !process.stdin.isTTY) {
-        fail(ctx, "Missing --models. Usage: subrouter preset create work --models 'anthropic/claude-opus-4-6#max,xai/grok-4.6'")
+        fail(ctx, "Missing --models. Usage: subrouter preset create work --models 'anthropic/claude-opus-4-6#max,xai/grok-4.7'")
       }
       const input = await clack.text({
         message: 'Ranked provider/model entries, comma separated',
-        placeholder: 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high,xai/grok-4.6',
+        placeholder: 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high,xai/grok-4.7',
       })
       if (clack.isCancel(input) || !input) exit(ctx, 0)
       return input
