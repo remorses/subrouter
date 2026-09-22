@@ -740,16 +740,16 @@ cli
   )
   .option('--models [models]', z.string().optional().describe('Comma-separated provider/model entries, ranked. Append #variant to pin reasoning effort'))
   .option('--force', 'Overwrite an existing preset without confirmation')
-  .example("subrouter preset create work --models 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high,xai/grok-4.7'")
+  .example("subrouter preset create work --models 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high,xai/grok-4.6'")
   .action(async (name, options, ctx) => {
     const raw = await (async () => {
       if (options.models) return options.models
       if (isAgent || !process.stdin.isTTY) {
-        fail(ctx, "Missing --models. Usage: subrouter preset create work --models 'anthropic/claude-opus-4-6#max,xai/grok-4.7'")
+        fail(ctx, "Missing --models. Usage: subrouter preset create work --models 'anthropic/claude-opus-4-6#max,xai/grok-4.6'")
       }
       const input = await clack.text({
         message: 'Ranked provider/model entries, comma separated',
-        placeholder: 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high,xai/grok-4.7',
+        placeholder: 'anthropic/claude-opus-4-6#max,openai/gpt-5.5#high,xai/grok-4.6',
       })
       if (clack.isCancel(input) || !input) exit(ctx, 0)
       return input
