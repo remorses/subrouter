@@ -1,6 +1,7 @@
 // Public API of the subrouter package: stores, routing engine and adapters.
 export * from './store.ts'
 export * from './router.ts'
+export { AnthropicReauthRequiredError, AnthropicTokenError } from './adapters/anthropic.ts'
 export {
   AUTH_SCHEMA_URL,
   CONFIG_SCHEMA_URL,

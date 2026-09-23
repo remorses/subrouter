@@ -270,6 +270,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   delete process.env.SUBROUTER_ANTHROPIC_BASE_URL
+  delete process.env.SUBROUTER_ANTHROPIC_TOKEN_URL
   delete process.env.SUBROUTER_MODELS_DEV_URL
   delete process.env.SUBROUTER_OPENAI_BASE_URL
   delete process.env.SUBROUTER_OPENCODE_GO_BASE_URL
@@ -320,8 +321,8 @@ describe('RouterModel failover', () => {
     expect(anthropicMock.requests.length).toBe(2)
     expect(anthropicMock.requests.map((r) => r.authorization)).toEqual(['Bearer acc2', 'Bearer acc1'])
     expect(anthropicMock.requests.map((r) => r.userAgent)).toEqual([
-      'claude-cli/2.1.257 (external, cli)',
-      'claude-cli/2.1.257 (external, cli)',
+      'claude-cli/2.1.280 (external, cli)',
+      'claude-cli/2.1.280 (external, cli)',
     ])
     expect(opencodeMock.requests[0]!.authorization).toBe('Bearer zen-key')
     expect(opencodeMock.requests[0]!.opencodeSession).toMatch(
@@ -331,6 +332,85 @@ describe('RouterModel failover', () => {
     // Both anthropic accounts are now cooling down globally
     const state = await loadState()
     expect(Object.keys(state.cooldowns).sort()).toEqual(['anthropic:a@x.com', 'anthropic:b@x.com'])
+  })
+
+  test('expired Anthropic refresh fails over without a quota cooldown', async () => {
+    const tokenServer = await startMockServer(() => ({
+      status: 400,
+      body: JSON.stringify({ error: 'invalid_grant', error_description: 'Refresh token expired' }),
+    }))
+    const fallback = await startMockServer(() => chatCompletionOk('fallback'))
+    servers = [tokenServer, fallback]
+    process.env.SUBROUTER_ANTHROPIC_TOKEN_URL = `${tokenServer.url}/v1/oauth/token`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${fallback.url}/v1`
+    const expired = oauthAccount({ email: 'expired@x.com', access: 'old', expires: 0 })
+    await addAccount({ provider: 'anthropic', account: expired })
+    await addAccount({ provider: 'opencode-go', account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 } })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    const notices: unknown[] = []
+    const model = new RouterModel({ preset: 'test', onAuthFailure: (notice) => { notices.push(notice) } })
+    await model.doGenerate(callOptions)
+    await model.doGenerate(callOptions)
+
+    expect(tokenServer.requests).toHaveLength(2)
+    expect(fallback.requests).toHaveLength(2)
+    expect((await loadState()).cooldowns).toEqual({})
+    expect(notices).toContainEqual(expect.objectContaining({ account: 'expired@x.com', reason: 'relogin' }))
+  })
+
+  test('Anthropic token endpoint 429 fails over without a model quota cooldown', async () => {
+    const tokenServer = await startMockServer(() => ({
+      status: 429,
+      headers: { 'retry-after': '30' },
+      body: JSON.stringify({ error: { type: 'rate_limit_error', message: 'Rate limited' } }),
+    }))
+    const fallback = await startMockServer(() => chatCompletionOk('fallback'))
+    servers = [tokenServer, fallback]
+    process.env.SUBROUTER_ANTHROPIC_TOKEN_URL = `${tokenServer.url}/v1/oauth/token`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${fallback.url}/v1`
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com', expires: 0 }) })
+    await addAccount({ provider: 'opencode-go', account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 } })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    const notices: unknown[] = []
+    const model = new RouterModel({ preset: 'test', onAuthFailure: (notice) => { notices.push(notice) } })
+    await model.doGenerate(callOptions)
+    await model.doGenerate(callOptions)
+
+    expect(tokenServer.requests).toHaveLength(2)
+    expect((await loadState()).cooldowns).toEqual({})
+    expect(notices).toContainEqual(expect.objectContaining({ account: 'a@x.com', reason: 'temporary' }))
+  })
+
+  test('a healthy second Anthropic account wins after the first needs re-login', async () => {
+    const tokenServer = await startMockServer(() => ({
+      status: 400,
+      body: JSON.stringify({ error: 'invalid_grant', error_description: 'Refresh token expired' }),
+    }))
+    const anthropic = await startMockServer(() => ({
+      status: 200,
+      body: JSON.stringify({
+        id: 'msg_1', type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'healthy' }], stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }),
+    }))
+    const fallback = await startMockServer(() => chatCompletionOk('wrong provider'))
+    servers = [tokenServer, anthropic, fallback]
+    process.env.SUBROUTER_ANTHROPIC_TOKEN_URL = `${tokenServer.url}/v1/oauth/token`
+    process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropic.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${fallback.url}/v1`
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'healthy@x.com', refresh: 'fresh', access: 'healthy' }) })
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'expired@x.com', refresh: 'expired', access: 'old', expires: 0 }) })
+    await addAccount({ provider: 'opencode-go', account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 } })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    const result = await new RouterModel({ preset: 'test' }).doGenerate(callOptions)
+    expect(result.content).toContainEqual(expect.objectContaining({ type: 'text', text: 'healthy' }))
+    expect(anthropic.requests.map((request) => request.authorization)).toEqual(['Bearer healthy'])
+    expect(fallback.requests).toHaveLength(0)
+    expect((await loadState()).cooldowns).toEqual({})
   })
 
   test('logs trying and failover through the harness callback', async () => {

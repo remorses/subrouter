@@ -44,6 +44,7 @@ import {
   type SubrouterLog,
 } from './adapters/index.ts'
 import { OPENCODE_GO_SESSION_HEADER } from './adapters/opencode-go.ts'
+import { AnthropicReauthRequiredError, AnthropicTokenError } from './adapters/anthropic.ts'
 import {
   OPENAI_WEBSOCKET_SESSION_HEADER,
   OPENAI_WEBSOCKET_TITLE_HEADER,
@@ -175,6 +176,14 @@ export type CooldownFallbackNotice = {
     provider: ProviderId
     modelId: string
   }
+}
+
+export type AuthFailureNotice = {
+  sessionID?: string
+  agent?: string
+  provider: ProviderId
+  account: string
+  reason: 'relogin' | 'temporary'
 }
 
 type CoolingCandidate = Candidate & { until: number }
@@ -444,6 +453,7 @@ export type RouterModelArgs = {
   affinity?: RouteAffinity
   onEvent?: (event: RouterEvent) => void
   onCooldownFallback?: (notice: CooldownFallbackNotice) => void | Promise<void>
+  onAuthFailure?: (notice: AuthFailureNotice) => void | Promise<void>
   log?: SubrouterLog
 }
 
@@ -455,6 +465,7 @@ export class RouterModel implements LanguageModelV3 {
   private affinity?: RouteAffinity
   private onEvent?: (event: RouterEvent) => void
   private onCooldownFallback?: (notice: CooldownFallbackNotice) => void | Promise<void>
+  private onAuthFailure?: (notice: AuthFailureNotice) => void | Promise<void>
   private log?: SubrouterLog
 
   constructor(args: RouterModelArgs) {
@@ -462,6 +473,7 @@ export class RouterModel implements LanguageModelV3 {
     this.affinity = args.affinity
     this.onEvent = args.onEvent
     this.onCooldownFallback = args.onCooldownFallback
+    this.onAuthFailure = args.onAuthFailure
     this.log = args.log
   }
 
@@ -477,6 +489,28 @@ export class RouterModel implements LanguageModelV3 {
           update,
         })
       },
+    })
+  }
+
+  private reportAuthFailure({
+    candidate,
+    reason,
+    headers,
+  }: { candidate: Candidate; reason: AuthFailureNotice['reason']; headers: Headers }) {
+    if (!this.onAuthFailure) return
+    const notice: AuthFailureNotice = {
+      sessionID: headers.get(OPENAI_WEBSOCKET_SESSION_HEADER) ?? undefined,
+      agent: headers.get(OPENCODE_AGENT_HEADER) ?? undefined,
+      provider: candidate.provider,
+      account: accountLabel(candidate.account),
+      reason,
+    }
+    void Promise.resolve().then(() => this.onAuthFailure!(notice)).catch((cause) => {
+      emitLog(this.log, {
+        level: 'warn',
+        message: 'failed to report authentication failure',
+        extra: { error: cause instanceof Error ? cause.message : String(cause) },
+      })
     })
   }
 
@@ -632,6 +666,25 @@ export class RouterModel implements LanguageModelV3 {
       }
 
       const error = inspected.error
+      if (
+        candidate.provider === 'anthropic' &&
+        (error instanceof AnthropicReauthRequiredError ||
+          (error instanceof AnthropicTokenError && error.statusCode === 429))
+      ) {
+        const authCooldownMs = error instanceof AnthropicTokenError ? error.retryAfterMs : 0
+        const reason = error instanceof AnthropicReauthRequiredError ? 'relogin' : 'temporary'
+        if (reason === 'temporary') {
+          soonestRetryAfterMs = soonestRetryAfterMs === undefined
+            ? authCooldownMs
+            : Math.min(soonestRetryAfterMs, authCooldownMs)
+        }
+        this.reportAuthFailure({ candidate, reason, headers })
+        const failover = { type: 'failover' as const, candidate, error, cooldownMs: authCooldownMs }
+        this.onEvent?.(failover)
+        logRouterEvent(failover, this.log)
+        attempts.push(`${candidate.provider}/${candidate.modelId} ${accountLabel(candidate.account, candidate.accountIndex)}: ${error.message}`)
+        continue
+      }
       const action = classifyFailure(failureDetailsFromError(error))
       if (!action) throw asOpenCodeRetryableError(error)
 
@@ -963,6 +1016,7 @@ export function createSubrouter(
     affinity?: RouteAffinity
     onEvent?: (event: RouterEvent) => void
     onCooldownFallback?: (notice: CooldownFallbackNotice) => void | Promise<void>
+    onAuthFailure?: (notice: AuthFailureNotice) => void | Promise<void>
     log?: SubrouterLog
     presetByApiId?: Record<string, string>
   } = {},
@@ -973,6 +1027,7 @@ export function createSubrouter(
       affinity: options.affinity,
       onEvent: options.onEvent,
       onCooldownFallback: options.onCooldownFallback,
+      onAuthFailure: options.onAuthFailure,
       log: options.log,
     })
   return {

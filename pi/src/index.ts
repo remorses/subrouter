@@ -25,6 +25,8 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
 import {
   accountLabel,
   adapters,
+  AnthropicReauthRequiredError,
+  AnthropicTokenError,
   AllCandidatesExhaustedError,
   OPENCODE_GO_SESSION_HEADER,
   classifyFailure,
@@ -347,6 +349,16 @@ function streamPreset({
       }
       const apiKey = await adapters[candidate.provider].getApiKey({ account: candidate.account, persist })
       if (apiKey instanceof Error) {
+        if (
+          candidate.provider === 'anthropic' &&
+          (apiKey instanceof AnthropicReauthRequiredError ||
+            (apiKey instanceof AnthropicTokenError && apiKey.statusCode === 429))
+        ) {
+          const authCooldownMs = apiKey instanceof AnthropicTokenError ? apiKey.retryAfterMs : 0
+          logRouterEvent({ type: 'failover', candidate, error: apiKey, cooldownMs: authCooldownMs }, log)
+          attempts.push(`${candidate.provider}/${candidate.modelId} ${accountLabel(candidate.account, candidate.accountIndex)}: ${apiKey.message}`)
+          continue
+        }
         const action = classifyFailure({ message: apiKey.message })
         if (!action) {
           endWithError({ stream, model: target.model, error: apiKey })

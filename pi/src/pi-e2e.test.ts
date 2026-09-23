@@ -48,6 +48,7 @@ const envNames = [
   'PI_OFFLINE',
   'SUBROUTER_HOME',
   'SUBROUTER_ANTHROPIC_BASE_URL',
+  'SUBROUTER_ANTHROPIC_TOKEN_URL',
   'SUBROUTER_OPENAI_BASE_URL',
   'SUBROUTER_XAI_BASE_URL',
   'SUBROUTER_OPENCODE_GO_BASE_URL',
@@ -483,6 +484,40 @@ describe.sequential('@subrouter/pi', () => {
     expect(Object.keys((await loadState()).cooldowns)).toEqual(['anthropic:anthropic@example.com'])
     await expect(fs.access(path.join(agentDir, 'auth.json'))).rejects.toThrow()
   }, 30_000)
+
+  test('an expired Anthropic refresh falls through without a quota cooldown', async () => {
+    const tokenServer = await listen((_request, response) => {
+      response.writeHead(400, { 'content-type': 'application/json' })
+      response.end(JSON.stringify({ error: 'invalid_grant', error_description: 'Refresh token expired' }))
+    })
+    process.env.SUBROUTER_ANTHROPIC_TOKEN_URL = tokenServer.url
+    try {
+      const anthropicModel = builtinProviders().find((provider) => provider.id === 'anthropic')?.getModels()[0]
+      if (!anthropicModel) throw new Error('Pi has no Anthropic model for the integration test')
+      await addAccount({
+        provider: 'anthropic',
+        account: { type: 'oauth', email: 'expired@example.com', refresh: 'old-refresh', access: 'old-access', expires: 0, addedAt: 1, lastUsed: 1 },
+      })
+      await addAccount({
+        provider: 'opencode-go',
+        account: { type: 'api', key: 'fake-zen-key', addedAt: 1, lastUsed: 1 },
+      })
+      await savePreset({
+        name: 'integration',
+        models: [`anthropic/${anthropicModel.id}`, `opencode-go/${openCodeTestModel().id}`],
+      })
+
+      const session = await createPiSession('integration')
+      await session.prompt('Say hello')
+      expect(session.messages.findLast((message) => message.role === 'assistant')).toMatchObject({
+        provider: 'opencode-go', stopReason: 'stop',
+      })
+      expect((await loadState()).cooldowns).toEqual({})
+      expect(anthropicServer.requests).toHaveLength(0)
+    } finally {
+      await closeServer(tokenServer.server)
+    }
+  })
 
   test('keeps the fallback candidate through tool follow-ups until the agent settles', async () => {
     const model = openCodeTestModel()

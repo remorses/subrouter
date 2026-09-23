@@ -26,6 +26,7 @@ import {
   adapters,
   addAccount,
   DEFAULT_PRESET_NAME,
+  ensureOpencodeConfigLink,
   isProviderId,
   loadModelsDevCatalog,
   loadPresets,
@@ -41,6 +42,7 @@ import {
   resolvePresetModels,
   RouteAffinity,
   type CooldownFallbackNotice,
+  type AuthFailureNotice,
   type StoredAccount,
   type SubrouterLog,
 } from '@subrouter/cli'
@@ -105,8 +107,30 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
     }
     void log?.({ level: 'warn', message: result.message })
   }
+  const onAuthFailure = async (notice: AuthFailureNotice) => {
+    if (!notice.sessionID || !notice.agent || notice.agent === 'title') return
+    const key = `${notice.sessionID}:${notice.provider}:${notice.account}:${notice.reason}`
+    const text = notice.reason === 'relogin'
+      ? `Subrouter: ${notice.provider} account ${notice.account} needs re-login. Run: subrouter login ${notice.provider}`
+      : `Subrouter: ${notice.provider} account ${notice.account} could not refresh its token. Trying another subscription.`
+    const delivered = deliveredNotices.get(key)
+    if (delivered && delivered.expiresAt > Date.now()) return
+    const current = { text, expiresAt: Date.now() + (notice.reason === 'relogin' ? 60 * 60 * 1000 : 60_000) }
+    deliveredNotices.set(key, current)
+    const result = await client.tui.showToast({
+      query: { directory },
+      body: { message: `${text} ${notice.sessionID}`, variant: notice.reason === 'relogin' ? 'error' : 'info' },
+      throwOnError: true,
+    }).catch((cause) => new Error('failed to show authentication toast', { cause }))
+    if (!(result instanceof Error)) return
+    if (deliveredNotices.get(key) === current) deliveredNotices.delete(key)
+    void log?.({ level: 'warn', message: result.message })
+  }
   return {
     config: async (config) => {
+      // OpenCode is loading us, so its data dir exists: drop the
+      // subrouter.json symlink even when no subrouter state changes.
+      await ensureOpencodeConfigLink()
       const presets = await loadPresets().catch(() => {
         return { version: 1 as const, presets: {} }
       })
@@ -222,7 +246,7 @@ export const subrouterPlugin: Plugin = async ({ client, directory }) => {
           name: PROVIDER_DISPLAY_NAME,
           npm: providerEntryUrl(),
           models,
-          options: { affinity, log, onCooldownFallback, presetByApiId },
+          options: { affinity, log, onCooldownFallback, onAuthFailure, presetByApiId },
         },
       }
     },

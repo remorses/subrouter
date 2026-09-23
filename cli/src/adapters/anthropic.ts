@@ -18,6 +18,7 @@ import { createServer, type Server } from 'node:http'
 import type { StoredAccount } from '../store.ts'
 import {
   callbackLoginInstructions,
+  classifyFailure,
   isPermanentRefreshFailure,
   resolveBaseUrl,
   type BeginLoginArgs,
@@ -30,6 +31,18 @@ export class AnthropicAuthError extends errore.createTaggedError({
   name: 'AnthropicAuthError',
   message: 'Anthropic auth failed: $reason',
 }) {}
+
+export class AnthropicTokenError extends AnthropicAuthError {
+  readonly statusCode: number
+  readonly retryAfterMs: number
+  constructor({ statusCode, retryAfterMs, reason }: { statusCode: number; retryAfterMs: number; reason: string }) {
+    super({ reason })
+    this.statusCode = statusCode
+    this.retryAfterMs = retryAfterMs
+  }
+}
+
+export class AnthropicReauthRequiredError extends AnthropicAuthError {}
 
 const CLIENT_ID = (() => {
   const encoded = 'OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl'
@@ -115,7 +128,16 @@ async function postTokenRequest(body: Record<string, string>): Promise<Anthropic
   if (response instanceof Error) return response
   const text = await response.text().catch(() => '')
   if (!response.ok) {
-    return new AnthropicAuthError({ reason: `token endpoint returned ${response.status}: ${text}` })
+    const retryAfterMs = classifyFailure({
+      statusCode: response.status,
+      headers: Object.fromEntries(response.headers.entries()),
+      message: '',
+    })?.cooldownMs ?? 60_000
+    return new AnthropicTokenError({
+      statusCode: response.status,
+      retryAfterMs,
+      reason: `token endpoint returned ${response.status}: ${text}`,
+    })
   }
   const parsed = errore.try(() => JSON.parse(text) as TokenData)
   if (parsed instanceof Error) {
@@ -561,7 +583,9 @@ async function freshAccessToken({
   persist: PersistTokens
 }): Promise<Error | string> {
   if (account.access && account.expires && account.expires > Date.now()) return account.access
-  if (!account.refresh) return new AnthropicAuthError({ reason: 'account has no refresh token' })
+  if (!account.refresh) {
+    return new AnthropicReauthRequiredError({ reason: 'account has no refresh token. Run: subrouter login anthropic' })
+  }
 
   const refreshToken = account.refresh
   const pending = pendingRefresh.get(refreshToken)
@@ -570,10 +594,11 @@ async function freshAccessToken({
     (async () => {
       const tokens = await refreshAnthropicToken(refreshToken)
       if (tokens instanceof Error) {
-        if (isPermanentRefreshFailure(tokens)) {
-          // Keep "re-login required" so classifyFailure rotates. Surface the
-          // source reason and the exact command so the fix is obvious.
-          return new AnthropicAuthError({
+        if (
+          isPermanentRefreshFailure(tokens) ||
+          (tokens instanceof AnthropicTokenError && (tokens.statusCode === 401 || tokens.statusCode === 403))
+        ) {
+          return new AnthropicReauthRequiredError({
             reason: `Claude subscription re-login required, run: subrouter login anthropic (${tokens.reason})`,
             cause: tokens,
           })

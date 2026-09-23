@@ -237,6 +237,42 @@ test('cooldown fallback shows one session-scoped toast during the active run', a
   ])
 })
 
+test('expired refresh shows an account-specific re-login toast once', async () => {
+  const requests: Array<{ path: string; body: { message: string; variant: string } }> = []
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = []
+    req.on('data', (chunk: Buffer) => chunks.push(chunk))
+    req.on('end', () => {
+      requests.push({ path: req.url ?? '', body: JSON.parse(Buffer.concat(chunks).toString('utf8')) })
+      res.writeHead(200, { 'Content-Type': 'application/json' })
+      res.end('{}')
+    })
+  })
+  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
+  openServers.push(server)
+  const address = server.address()
+  if (typeof address === 'string' || !address) throw new Error('failed to bind notification server')
+  const client = createOpencodeClient({ baseUrl: `http://127.0.0.1:${address.port}` })
+  const hooks = await subrouterPlugin({ ...pluginInput, client, directory: '/tmp/project' })
+  const config: Config = {}
+  await hooks.config?.(config)
+  const onAuthFailure = config.provider?.subrouter?.options?.onAuthFailure
+  if (typeof onAuthFailure !== 'function') throw new Error('expected authentication callback')
+  const notice = {
+    sessionID: 'ses_session1', agent: 'build', provider: 'anthropic', account: 't.de@example.com', reason: 'relogin',
+  } as const
+  await onAuthFailure(notice)
+  await onAuthFailure(notice)
+
+  expect(requests).toEqual([{
+    path: '/tui/show-toast?directory=%2Ftmp%2Fproject',
+    body: {
+      message: 'Subrouter: anthropic account t.de@example.com needs re-login. Run: subrouter login anthropic ses_session1',
+      variant: 'error',
+    },
+  }])
+})
+
 test('config hook registers the subrouter provider with preset models', async () => {
   await savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })
 
