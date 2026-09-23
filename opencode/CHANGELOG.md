@@ -2,6 +2,14 @@
 
 # Changelog
 
+## 0.5.1
+
+1. **Show the cooldown fallback route as a TUI toast** instead of injecting a session message. When a preferred subscription is rate limited and the request continues on a lower-ranked model, the plugin now uses `client.tui.showToast`. Before, it wrote the notice with `session.prompt`, which persisted a `role: user` message that could enter model context. The toast is display-only and never reaches the model.
+
+   `tui.toast.show` is a global event with no session field, so the plugin appends the OpenCode session id to the toast text. Kimaki routes the toast to the matching Discord thread by that marker and strips it before display. Plain OpenCode TUI shows the toast for the active session. Notices are still deduplicated per session for the preferred model's cooldown window.
+
+2. **Includes `@subrouter/cli` 0.6.1**: fixed Claude Pro/Max login and token refresh, Claude Code `2.1.280` user-agent, and retries for OpenAI WebSocket 1006 drops.
+
 ## 0.5.0
 
 1. **Pin reasoning effort from preset `#variant` entries.** OpenCode applies that pin on the live SDK unless the session already set `--variant` or `subrouter/<name>#high`. The plugin publishes the first live candidate's variants so the OpenCode picker can change effort per session. If the live fallback does not list that session variant, Subrouter uses the candidate pin or the provider default.

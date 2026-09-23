@@ -1,6 +1,6 @@
 {
   "name": "@subrouter/cli",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "type": "module",
   "description": "Router that rotates across personal AI subscriptions when one reaches its usage limit.",
   "bin": {

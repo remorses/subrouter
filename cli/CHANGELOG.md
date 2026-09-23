@@ -2,6 +2,26 @@
 
 # Changelog
 
+## 0.6.1
+
+1. **Fixed Claude Pro/Max login and token refresh inside OpenCode.** Bun sends `User-Agent: opencode/<version>` by default, and the Claude OAuth token endpoint answers it with a fake rate limit, so every login and refresh failed:
+
+   ```
+   token endpoint returned 429: {"error": {"type": "rate_limit_error", "message": "Rate limited. Please try again later."}}
+   ```
+
+   Harnesses like the Kimaki Discord bot showed this as `Authorization code was invalid or expired`. Token requests now send the Claude Code user-agent, the same one Anthropic API calls already use.
+
+2. **Advertise Claude Code `2.1.280` on Anthropic OAuth requests.** Anthropic returns 400 when the Claude Code client is older than `2.1.280`:
+
+   ```
+   Claude Code 2.1.257 does not support this model; version 2.1.280 or newer is required.
+   ```
+
+   The Anthropic adapter now sends `user-agent: claude-cli/2.1.280 (external, cli)`.
+
+3. **Retry OpenAI WebSocket 1006 drops instead of rotating the account.** A `code 1006` abnormal close (`OpenAI WebSocket failed: closed before response completed`) is a transient network failure, not a quota or auth rejection. Subrouter no longer cools down the account for 5 minutes. It is wrapped as a retryable `APICallError`, so OpenCode retries the turn on the same subscription with its normal backoff. A `code 1008` policy-violation close is still terminal.
+
 ## 0.6.0
 
 1. **Import matching OpenCode logins** instead of repeating `subrouter login` for every provider.
