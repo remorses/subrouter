@@ -7,7 +7,7 @@
  * cooldown, filters out models that cannot accept the prompt modalities, and
  * delegates to the first usable underlying model. When a call fails with a
  * rate-limit/usage error, the account is put in cooldown
- * (globally, in ~/.subrouter/config.json cooldowns) and the next candidate is tried.
+ * (globally, in ~/.subrouter/runtime.json cooldowns) and the next candidate is tried.
  * A successful candidate stays first for later calls in the same agent run.
  * Cooling-down-only failures throw a retryable 429 so OpenCode waits
  * instead of dying. It only throws a hard error when nothing can be retried.

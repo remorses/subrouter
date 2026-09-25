@@ -39,7 +39,7 @@ Subrouter deliberately avoids that translation matrix. Reusing the harness's pro
 pnpm workspace, flat `./*` packages. **One root README only, no per-package READMEs.**
 
 - `cli/` — npm package `@subrouter/cli`. Everything lives here:
-  - `src/store.ts` — accounts and login state in `~/.subrouter/auth.json`; presets, cooldowns, and live routes in `~/.subrouter/config.json` (override: `SUBROUTER_HOME`). JSON, 0600, lock-dir locking.
+  - `src/store.ts` — accounts and login state in `~/.subrouter/auth.json`; user-facing presets in `~/.subrouter/config.json`; internal machine state (cooldowns, live routes) in `~/.subrouter/runtime.json` (override: `SUBROUTER_HOME`). JSON, 0600, lock-dir locking. On each write it best-effort symlinks `config.json` into OpenCode's data dir as `subrouter.json` (see `ensureOpencodeConfigLink`).
   - `src/adapters/` — one adapter per provider (login flow, token refresh, fetch wrapper, `createModel`). Shared failure classification in `adapters/index.ts`.
   - `src/router.ts` — `RouterModel` (AI SDK `LanguageModelV3`) + `createSubrouter` provider factory. Resolves a preset to ranked candidates, skips cooldowns, fails over on rotate-worthy errors.
   - `src/cli.ts` — goke CLI (`login`, `import opencode`, `logout`, `account`, `preset`, `status`, `cooldown clear`).
@@ -120,7 +120,7 @@ Users never hand-edit config files. All state is created through the CLI (`subro
 
 ## Cooldowns are global machine scope
 
-Rate-limit state lives in `~/.subrouter/config.json`, shared by every process and harness on the machine, so a rate-limited subscription is not retried per-session. Never shorten an existing cooldown. 429 and usage-limit errors honor `retry-after` / `retry-after-ms` when the provider sends them, including `0`. Otherwise 5 minutes. Overloaded / at-capacity errors cool down 1 minute. 402 (balance exhausted) cools down 10 minutes.
+Rate-limit state lives in `~/.subrouter/runtime.json`, shared by every process and harness on the machine, so a rate-limited subscription is not retried per-session. Never shorten an existing cooldown. 429 and usage-limit errors honor `retry-after` / `retry-after-ms` when the provider sends them, including `0`. Otherwise 5 minutes. Overloaded / at-capacity errors cool down 1 minute. 402 (balance exhausted) cools down 10 minutes.
 
 Pi's native OpenAI-compatible adapter does not call `onResponse` on HTTP errors. A 429 therefore reaches Subrouter as error text only, without retry headers. OpenCode goes through AI SDK `APICallError.responseHeaders`, which does carry them.
 

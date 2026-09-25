@@ -1,5 +1,5 @@
 /**
- * Zod schemas for ~/.subrouter/config.json and ~/.subrouter/auth.json.
+ * Zod schemas for ~/.subrouter/config.json, ~/.subrouter/runtime.json and ~/.subrouter/auth.json.
  * Compiled to JSON Schema and served at subrouter.org so editors can autocomplete.
  */
 
@@ -22,6 +22,9 @@ export type ProviderId = (typeof PROVIDER_IDS)[number]
 export const CONFIG_SCHEMA_URL = 'https://subrouter.org/config.schema.json'
 export const AUTH_SCHEMA_URL = 'https://subrouter.org/auth.schema.json'
 export const SCHEMA_URL = CONFIG_SCHEMA_URL
+
+/** Internal machine state (cooldowns, live routes). Not user-editable. */
+export const RUNTIME_SCHEMA_URL = 'https://subrouter.org/runtime.schema.json'
 
 const providerIdSchema = z.enum(PROVIDER_IDS).describe('Subscription provider id')
 
@@ -93,6 +96,13 @@ export const configFileSchema = z
     presets: z
       .record(z.string(), z.array(z.string()).describe('Ranked provider/model entries such as anthropic/claude-opus-4-6 or openai/gpt-5.5#high'))
       .describe('Named presets. Each value is the failover order for that preset'),
+  })
+  .describe('~/.subrouter/config.json: user-facing presets only')
+
+export const runtimeFileSchema = z
+  .object({
+    $schema: z.string().optional().describe('JSON Schema URL for editor autocomplete'),
+    version: z.literal(1),
     cooldowns: z
       .record(z.string(), z.number())
       .describe('Map of provider:accountKey to epoch milliseconds until the account is usable again'),
@@ -109,7 +119,7 @@ export const configFileSchema = z
       )
       .describe('Map of session id to the live route until that session goes idle'),
   })
-  .describe('~/.subrouter/config.json')
+  .describe('~/.subrouter/runtime.json: internal machine state, written by subrouter, not user-editable')
 
 export const authFileSchema = z
   .object({
@@ -124,12 +134,19 @@ export type StoredAccount = z.infer<typeof storedAccountSchema>
 export type ProviderAccounts = z.infer<typeof providerAccountsSchema>
 export type LoginState = z.infer<typeof loginStateSchema>
 export type ConfigFile = z.infer<typeof configFileSchema>
+export type RuntimeFile = z.infer<typeof runtimeFileSchema>
 export type AuthFile = z.infer<typeof authFileSchema>
 export type AccountsFile = { version: 1; providers: AuthFile['providers'] }
 export type PresetsFile = { version: 1; presets: ConfigFile['presets'] }
-export type StateFile = { version: 1; cooldowns: ConfigFile['cooldowns'] }
+export type StateFile = { version: 1; cooldowns: RuntimeFile['cooldowns'] }
 
 export const configJsonSchema = z.toJSONSchema(configFileSchema, {
+  target: 'draft-7',
+  io: 'input',
+  unrepresentable: 'any',
+})
+
+export const runtimeJsonSchema = z.toJSONSchema(runtimeFileSchema, {
   target: 'draft-7',
   io: 'input',
   unrepresentable: 'any',

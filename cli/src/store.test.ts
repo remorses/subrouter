@@ -1,4 +1,15 @@
-import { mkdir, mkdtemp, open, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  readFile,
+  readdir,
+  readlink,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
@@ -8,6 +19,8 @@ import {
   addAccount,
   authFilePath,
   configFilePath,
+  runtimeFilePath,
+  ensureOpencodeConfigLink,
   cooldownKey,
   isCoolingDown,
   loadAccounts,
@@ -25,7 +38,14 @@ import {
   writeJson,
   type StoredAccount,
 } from './store.ts'
-import { AUTH_SCHEMA_URL, authJsonSchema, CONFIG_SCHEMA_URL, configJsonSchema } from './schemas.ts'
+import {
+  AUTH_SCHEMA_URL,
+  authJsonSchema,
+  CONFIG_SCHEMA_URL,
+  configJsonSchema,
+  RUNTIME_SCHEMA_URL,
+  runtimeJsonSchema,
+} from './schemas.ts'
 
 let home: string
 
@@ -127,6 +147,15 @@ describe('accounts', () => {
         "$schema",
         "version",
         "presets",
+      ]
+    `)
+  })
+
+  test('JSON schema exposes the runtime fields', () => {
+    expect(Object.keys(runtimeJsonSchema.properties ?? {})).toMatchInlineSnapshot(`
+      [
+        "$schema",
+        "version",
         "cooldowns",
         "routes",
       ]
@@ -144,10 +173,11 @@ describe('accounts', () => {
     `)
   })
 
-  test('writes $schema on config.json and auth.json', async () => {
+  test('writes $schema on config.json, runtime.json and auth.json', async () => {
     await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
     await savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })
     expect(JSON.parse(await readFile(configFilePath(), 'utf8')).$schema).toBe(CONFIG_SCHEMA_URL)
+    expect(JSON.parse(await readFile(runtimeFilePath(), 'utf8')).$schema).toBe(RUNTIME_SCHEMA_URL)
     expect(JSON.parse(await readFile(authFilePath(), 'utf8')).$schema).toBe(AUTH_SCHEMA_URL)
   })
 
@@ -219,7 +249,7 @@ describe('accounts', () => {
     expect(auth.providers['opencode-go'].accounts[0].key).toBe('go-key')
     expect(config.presets.work).toEqual(['anthropic/claude-opus-4-6', 'opencode-go/grok-4.6'])
     expect(config.providers).toBeUndefined()
-    expect((await readdir(home)).sort()).toEqual(['auth.json', 'config.json'])
+    expect((await readdir(home)).sort()).toEqual(['auth.json', 'config.json', 'runtime.json'])
   })
 
   test('splits a combined config.json into auth.json on first write', async () => {
@@ -245,12 +275,39 @@ describe('accounts', () => {
 
     await savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })
     const config = JSON.parse(await readFile(configFilePath(), 'utf8'))
+    const runtime = JSON.parse(await readFile(runtimeFilePath(), 'utf8'))
     const auth = JSON.parse(await readFile(authFilePath(), 'utf8'))
     expect(config.providers).toBeUndefined()
     expect(config.logins).toBeUndefined()
+    // cooldowns/routes migrate out of the old combined config.json into runtime.json
+    expect(config.cooldowns).toBeUndefined()
+    expect(config.routes).toBeUndefined()
+    expect(runtime.cooldowns['anthropic:a@x.com']).toBeGreaterThan(Date.now())
+    expect(runtime.routes).toEqual({})
     expect(auth.providers.anthropic.accounts[0].email).toBe('a@x.com')
     expect(auth.logins.openai.status).toBe('pending')
     expect(config.presets.work).toEqual(['anthropic/claude-opus-4-6'])
+  })
+
+  test('a failed runtime write during migration keeps cooldowns in the legacy config', async () => {
+    const until = Date.now() + 60_000
+    await writeFile(
+      configFilePath(),
+      JSON.stringify({
+        version: 1,
+        presets: { work: ['anthropic/claude-opus-4-6'] },
+        cooldowns: { 'anthropic:a@x.com': until },
+        routes: {},
+      }) + '\n',
+    )
+    // Make the runtime.json path unwritable: a directory cannot be replaced by
+    // writeJson's file rename, so the save throws before config.json is cleaned.
+    await mkdir(runtimeFilePath())
+
+    await expect(savePreset({ name: 'work', models: ['anthropic/claude-opus-4-6'] })).rejects.toThrow()
+
+    const config = JSON.parse(await readFile(configFilePath(), 'utf8'))
+    expect(config.cooldowns['anthropic:a@x.com']).toBe(until)
   })
 
   test('adding an account clears the provider login state', async () => {
@@ -396,5 +453,43 @@ describe('presets', () => {
     expect(after.presets).toEqual({})
     const missing = await removePreset('nope')
     expect(missing instanceof Error).toBe(true)
+  })
+})
+
+describe('opencode config symlink', () => {
+  test('links subrouter.json to config.json when the opencode dir exists', async () => {
+    const dataDir = path.join(home, 'opencode-data')
+    await mkdir(dataDir)
+    await ensureOpencodeConfigLink(dataDir)
+    const linkPath = path.join(dataDir, 'subrouter.json')
+    expect(await readlink(linkPath)).toBe(configFilePath())
+    // idempotent: a second call keeps the same link
+    await ensureOpencodeConfigLink(dataDir)
+    expect(await readlink(linkPath)).toBe(configFilePath())
+  })
+
+  test('does nothing when the opencode dir is absent', async () => {
+    const dataDir = path.join(home, 'missing-opencode')
+    await ensureOpencodeConfigLink(dataDir)
+    expect(await stat(path.join(dataDir, 'subrouter.json')).catch(() => null)).toBeNull()
+  })
+
+  test('never clobbers a real subrouter.json file', async () => {
+    const dataDir = path.join(home, 'opencode-real')
+    await mkdir(dataDir)
+    const real = path.join(dataDir, 'subrouter.json')
+    await writeFile(real, '{"real":true}\n')
+    await ensureOpencodeConfigLink(dataDir)
+    expect(await readFile(real, 'utf8')).toBe('{"real":true}\n')
+    expect(await readlink(real).catch(() => null)).toBeNull()
+  })
+
+  test('replaces a symlink pointing at the wrong target', async () => {
+    const dataDir = path.join(home, 'opencode-stale')
+    await mkdir(dataDir)
+    const linkPath = path.join(dataDir, 'subrouter.json')
+    await symlink(path.join(home, 'old-config.json'), linkPath)
+    await ensureOpencodeConfigLink(dataDir)
+    expect(await readlink(linkPath)).toBe(configFilePath())
   })
 })

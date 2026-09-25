@@ -1,16 +1,20 @@
 /**
  * Subrouter local state: accounts, login attempts, presets and cooldowns.
  *
- * Auth lives in ~/.subrouter/auth.json. Presets, cooldowns, and live routes
- * live in ~/.subrouter/config.json (override with SUBROUTER_HOME, used by
- * tests). Both files are atomically replaced JSON with 0600 permissions and
- * a lock directory for cross-process safety. Cooldown state is global on
- * purpose: when a subscription hits a rate limit, every process and harness
- * on the machine should stop retrying it until the cooldown expires.
- * In-flight session routes are stored in config.json, so /model and the
- * OpenCode system prompt can read the live provider/model from another
- * process. Combined config.json files from 0.5.0 are split on the next
- * write. 0.3.0 used accounts.json, presets.json, state.json, and
+ * Three files under ~/.subrouter (override with SUBROUTER_HOME, used by
+ * tests), each atomically replaced JSON with 0600 permissions and a lock
+ * directory for cross-process safety:
+ *   - auth.json    accounts + in-progress logins (secrets)
+ *   - config.json  user-facing presets only (safe to read, symlinked into
+ *                  OpenCode's data dir as subrouter.json)
+ *   - runtime.json internal machine state: cooldowns + live session routes
+ * Cooldown state is global on purpose: when a subscription hits a rate limit,
+ * every process and harness on the machine should stop retrying it until the
+ * cooldown expires. In-flight session routes live in runtime.json, so /model
+ * and the OpenCode system prompt can read the live provider/model from another
+ * process. config.json files from <=0.6 that still carry cooldowns/routes are
+ * migrated into runtime.json on the next write. 0.5.0 combined everything into
+ * config.json; 0.3.0 used accounts.json, presets.json, state.json, and
  * login-*.json. Those files are read until the next write, then replaced.
  * Provider id `opencode` is copied to `opencode-go` on that load.
  */
@@ -23,6 +27,7 @@ import path from 'node:path'
 import {
   AUTH_SCHEMA_URL,
   CONFIG_SCHEMA_URL,
+  RUNTIME_SCHEMA_URL,
   PROVIDER_IDS,
   type AccountsFile,
   type AuthFile,
@@ -31,6 +36,7 @@ import {
   type PresetsFile,
   type ProviderAccounts,
   type ProviderId,
+  type RuntimeFile,
   type StateFile,
   type StoredAccount,
 } from './schemas.ts'
@@ -44,6 +50,7 @@ export {
   type PresetsFile,
   type ProviderAccounts,
   type ProviderId,
+  type RuntimeFile,
   type StateFile,
   type StoredAccount,
 }
@@ -53,8 +60,8 @@ type StoreState = {
   providers: AuthFile['providers']
   logins: AuthFile['logins']
   presets: ConfigFile['presets']
-  cooldowns: ConfigFile['cooldowns']
-  routes: ConfigFile['routes']
+  cooldowns: RuntimeFile['cooldowns']
+  routes: RuntimeFile['routes']
 }
 
 type CombinedRaw = Partial<StoreState>
@@ -85,6 +92,10 @@ export function configFilePath() {
   return path.join(subrouterHome(), 'config.json')
 }
 
+export function runtimeFilePath() {
+  return path.join(subrouterHome(), 'runtime.json')
+}
+
 export function authFilePath() {
   return path.join(subrouterHome(), 'auth.json')
 }
@@ -92,8 +103,44 @@ export function authFilePath() {
 function schemaForFile(filePath: string) {
   const name = path.basename(filePath)
   if (name === 'config.json') return CONFIG_SCHEMA_URL
+  if (name === 'runtime.json') return RUNTIME_SCHEMA_URL
   if (name === 'auth.json') return AUTH_SCHEMA_URL
   return null
+}
+
+/**
+ * OpenCode's global data directory (holds auth.json). Mirrors OpenCode's own
+ * XDG resolution: $XDG_DATA_HOME/opencode or ~/.local/share/opencode.
+ */
+export function opencodeDataDir() {
+  const base = process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local', 'share')
+  return path.join(base, 'opencode')
+}
+
+/**
+ * If the user already has an OpenCode data folder, drop a `subrouter.json`
+ * symlink there that points at our config.json. Best-effort and idempotent;
+ * never throws. The default (real) OpenCode dir is skipped under Vitest so
+ * tests never touch the real home; tests exercise it by passing a temp dir.
+ */
+export async function ensureOpencodeConfigLink(dataDir = opencodeDataDir()) {
+  if (process.env.VITEST && dataDir === opencodeDataDir()) return
+  const exists = await fs.stat(dataDir).then(
+    (stats) => stats.isDirectory(),
+    () => false,
+  )
+  if (!exists) return
+  const linkPath = path.join(dataDir, 'subrouter.json')
+  const target = configFilePath()
+  const current = await fs.readlink(linkPath).catch(() => null)
+  if (current === target) return
+  if (current !== null) {
+    await fs.rm(linkPath, { force: true }).catch(() => {})
+  } else {
+    const already = await fs.lstat(linkPath).catch(() => null)
+    if (already) return // a real file lives there; do not clobber it
+  }
+  await fs.symlink(target, linkPath).catch(() => {})
 }
 
 // --- JSON I/O ---
@@ -219,8 +266,8 @@ function normalizePresets(input: Partial<ConfigFile['presets']> | undefined): Co
   return presets
 }
 
-function normalizeCooldowns(input: Partial<ConfigFile['cooldowns']> | undefined, now = Date.now()) {
-  const cooldowns: ConfigFile['cooldowns'] = {}
+function normalizeCooldowns(input: Partial<RuntimeFile['cooldowns']> | undefined, now = Date.now()) {
+  const cooldowns: RuntimeFile['cooldowns'] = {}
   for (const [key, until] of Object.entries(input ?? {})) {
     if (typeof until !== 'number') continue
     if (until <= now) continue
@@ -229,8 +276,8 @@ function normalizeCooldowns(input: Partial<ConfigFile['cooldowns']> | undefined,
   return cooldowns
 }
 
-function normalizeRoutes(input: Partial<ConfigFile['routes']> | undefined): ConfigFile['routes'] {
-  const routes: ConfigFile['routes'] = {}
+function normalizeRoutes(input: Partial<RuntimeFile['routes']> | undefined): RuntimeFile['routes'] {
+  const routes: RuntimeFile['routes'] = {}
   for (const [sessionID, route] of Object.entries(input ?? {})) {
     if (!route || typeof route !== 'object') continue
     if (typeof route.preset !== 'string' || !route.preset) continue
@@ -277,8 +324,8 @@ function remapOpencodePresets(input: Partial<ConfigFile['presets']> | undefined)
   return presets
 }
 
-function remapOpencodeCooldowns(input: Partial<ConfigFile['cooldowns']> | undefined) {
-  const cooldowns: Partial<ConfigFile['cooldowns']> = {}
+function remapOpencodeCooldowns(input: Partial<RuntimeFile['cooldowns']> | undefined) {
+  const cooldowns: Partial<RuntimeFile['cooldowns']> = {}
   for (const [key, until] of Object.entries(input ?? {})) {
     const next = key.startsWith('opencode:') ? `opencode-go:${key.slice('opencode:'.length)}` : key
     if (cooldowns[next] == null) cooldowns[next] = until
@@ -324,13 +371,15 @@ function storeFromRaw(raw: CombinedRaw | null): StoreState {
 async function loadStoreUnlocked(): Promise<StoreState> {
   const auth = await readJson<Partial<AuthFile> | null>(authFilePath(), null)
   const config = await readJson<CombinedRaw | null>(configFilePath(), null)
-  if (auth || config) {
+  const runtime = await readJson<Partial<RuntimeFile> | null>(runtimeFilePath(), null)
+  if (auth || config || runtime) {
     return storeFromRaw({
       providers: auth?.providers ?? config?.providers,
       logins: auth?.logins ?? config?.logins,
       presets: config?.presets,
-      cooldowns: config?.cooldowns,
-      routes: config?.routes,
+      // runtime.json is authoritative; fall back to a pre-split config.json.
+      cooldowns: runtime?.cooldowns ?? config?.cooldowns,
+      routes: runtime?.routes ?? config?.routes,
     })
   }
   return storeFromRaw(await loadLegacyConfig())
@@ -357,13 +406,22 @@ async function saveStoreUnlocked(file: StoreState) {
     providers: file.providers,
     logins: file.logins,
   })
-  await writeJson(configFilePath(), {
+  // Write runtime.json (the destination) before cleaning config.json (the
+  // legacy source). During the one-time split, a failure between the two must
+  // never leave cooldowns/routes in neither file: if the config write fails,
+  // runtime.json already holds them; if the runtime write fails, the old
+  // combined config.json still holds them for the next load.
+  await writeJson(runtimeFilePath(), {
     version: 1,
-    presets: file.presets,
     cooldowns: file.cooldowns,
     routes: file.routes,
   })
+  await writeJson(configFilePath(), {
+    version: 1,
+    presets: file.presets,
+  })
   await removeLegacyStateFiles()
+  await ensureOpencodeConfigLink()
 }
 
 export async function loadAccounts(): Promise<AccountsFile> {
