@@ -45,7 +45,7 @@ async function beginLogin(): Promise<Error | LoginSession> {
 export const opencodeGoAdapter: ProviderAdapter = {
   id: 'opencode-go',
   name: 'OpenCode Go',
-  defaultModels: ['grok-4.6', 'glm-5.3-flash'],
+  defaultModels: ['grok-4.7', 'glm-5.3-flash'],
   baseUrlEnvVar: 'SUBROUTER_OPENCODE_GO_BASE_URL',
   createModel({ modelId, account }) {
     const provider = createOpenAICompatible({

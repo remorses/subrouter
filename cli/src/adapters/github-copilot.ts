@@ -301,7 +301,7 @@ function buildFetch({ account, persist }: { account: StoredAccount; persist: Per
 export const githubCopilotAdapter: ProviderAdapter = {
   id: 'github-copilot',
   name: 'GitHub Copilot',
-  defaultModels: ['gpt-5.5', 'claude-opus-5'],
+  defaultModels: ['gpt-6-sol', 'claude-opus-5'],
   baseUrlEnvVar: 'SUBROUTER_GITHUB_COPILOT_BASE_URL',
   createModel({ modelId, account, persist }) {
     const baseURL = copilotApiUrl()

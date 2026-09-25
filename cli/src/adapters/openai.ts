@@ -507,7 +507,7 @@ function buildFetch({ account, persist }: { account: StoredAccount; persist: Per
 export const openaiAdapter: ProviderAdapter = {
   id: 'openai',
   name: 'OpenAI (ChatGPT Plus/Pro via Codex)',
-  defaultModels: ['gpt-5.5', 'gpt-5.4'],
+  defaultModels: ['gpt-6-sol', 'gpt-5.5'],
   baseUrlEnvVar: 'SUBROUTER_OPENAI_BASE_URL',
   createModel({ modelId, account, persist }) {
     const provider = createOpenAI({
