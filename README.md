@@ -126,7 +126,7 @@ Accounts live in `~/.subrouter/auth.json`. Log in **multiple times to the same p
 
 ### Cooldowns
 
-Cooldowns are **global per machine** (`~/.subrouter/config.json`). Once an account is rate limited, every session and every harness skips it until the cooldown expires.
+Cooldowns are **global per machine** (`~/.subrouter/runtime.json`). Once an account is rate limited, every session and every harness skips it until the cooldown expires.
 
 | Response                 | Cooldown                                                           |
 | ------------------------ | ------------------------------------------------------------------ |
@@ -136,7 +136,7 @@ Cooldowns are **global per machine** (`~/.subrouter/config.json`). Once an accou
 
 ### Presets
 
-Presets are ordered lists of `provider/model` entries. Append `#variant` to pin reasoning effort, for example `openai/gpt-5.5#high`. Every preset shows up in opencode Go and Pi as `subrouter/<preset-name>`.
+Presets are ordered lists of `provider/model` entries. Append `#variant` to pin **reasoning effort**, for example `openai/gpt-5.5#high` or `xai/grok-4.7#high`. **Default your entries to `#high`** so every subscription in the fallback chain reasons at full strength; drop to `medium`/`low` only when you want faster, cheaper turns. Every preset shows up in opencode Go and Pi as `subrouter/<preset-name>`.
 
 ## Difference from OpenRouter and API proxies
 
@@ -215,18 +215,31 @@ npx @subrouter/cli account order --provider anthropic work@x.com personal@x.com
 
 `account order` sets the fallback order inside one provider. Pass **every** account email. The first email is tried first.
 
-Tokens live in **`~/.subrouter/auth.json`**. Presets, cooldowns, and live routes live in **`~/.subrouter/config.json`**. Each file includes a `$schema` URL so editors can autocomplete fields: [auth.schema.json](https://subrouter.org/auth.schema.json) and [config.schema.json](https://subrouter.org/config.schema.json).
+Tokens live in **`~/.subrouter/auth.json`**. User-facing **presets** live in **`~/.subrouter/config.json`**. Internal machine state (**cooldowns** and live session **routes**) lives in **`~/.subrouter/runtime.json`**; Subrouter writes it, you never edit it. When an OpenCode data directory exists, Subrouter also symlinks `config.json` into it as `subrouter.json`. Each user-facing file includes a `$schema` URL so editors can autocomplete fields: [auth.schema.json](https://subrouter.org/auth.schema.json) and [config.schema.json](https://subrouter.org/config.schema.json).
 
 ### Presets
 
 ```bash
-npx @subrouter/cli preset create <name> --models 'anthropic/claude-opus-4-6#max,xai/grok-4.6' [--force]
+npx @subrouter/cli preset create <name> --models 'anthropic/claude-opus-4-6#max,xai/grok-4.7' [--force]
 npx @subrouter/cli preset list
 npx @subrouter/cli preset show [name]       # includes currently usable candidates
 npx @subrouter/cli preset remove [name] [--force]
 ```
 
-The order passed to `--models` is the fallback order. Append `#variant` to pin reasoning effort for that candidate. `preset create` checks the variant against models.dev. A session `--variant` or `subrouter/<name>#high` still wins over the preset pin. Every preset appears in both harnesses as `subrouter/<name>`.
+The order passed to `--models` is the fallback order. The `#variant` suffix on an entry pins that candidate's **reasoning effort** (the models.dev `effort` value, such as `low`, `medium`, `high`, `xhigh`, or a provider `max`). Subrouter maps it onto the live SDK per provider: `reasoningEffort` for OpenAI and xAI, `effort` for Anthropic. `preset create` validates the variant against the model's models.dev `reasoning_options` and rejects unknown or unsupported ones before saving.
+
+**Recommended: append `#high` to every entry.** Without a pin, each provider falls back to its own default effort, which differs across subscriptions and often under-reasons on coding work. Pinning `#high` keeps the whole fallback chain at high effort:
+
+```bash
+npx @subrouter/cli preset create build --force \
+  --models 'xai/grok-4.7#high,openai/gpt-5.6#high,anthropic/claude-opus-4-6#high,opencode-go/glm-5.3-flash'
+```
+
+A session `--variant` or `subrouter/<name>#high` still wins over the preset pin, so you can lower effort per session when you want a faster, cheaper turn. Every preset appears in both harnesses as `subrouter/<name>`.
+
+**GPT-only presets must start with `gpt-`.** OpenCode v2 reads the public preset id to pick the GPT prompt and the `patch` tool. A GPT-only preset named `sol` is treated as a normal model, so agents get `edit` and `write` instead of `apply_patch`. Name it `gpt-sol`.
+
+Do not use that prefix on a mixed preset. `work` with Anthropic first and GPT as fallback must stay `work`. The prefix is only for presets whose candidates are all GPT models.
 
 ### Status and cooldowns
 
