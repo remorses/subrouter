@@ -1,7 +1,8 @@
-/** OpenAI Responses WebSocket transport with account-safe session pooling. */
+/** OpenAI Responses WebSocket transport with account-safe warm connection pooling. */
 
 import { APICallError, isJSONObject, type JSONObject, type JSONValue } from '@ai-sdk/provider'
 import * as errore from 'errore'
+import { createHash } from 'node:crypto'
 import WebSocket from 'ws'
 
 export const OPENAI_WEBSOCKET_TITLE_HEADER = 'x-subrouter-title'
@@ -13,6 +14,7 @@ const CONNECT_TIMEOUT_MS = 15_000
 const IDLE_TIMEOUT_MS = 5 * 60 * 1000
 const MAX_CONNECTION_AGE_MS = 55 * 60 * 1000
 const MAX_STREAM_FAILURES = 5
+const MAX_REUSE_PREFIX_ITEMS = 256
 const CONNECTION_LIMIT_REACHED_CODE = 'websocket_connection_limit_reached'
 
 export class OpenAIWebSocketError extends errore.createTaggedError({
@@ -27,6 +29,12 @@ type PoolEntry = {
   busy: boolean
   fallback: boolean
   streamFailures: number
+  reuse?: RequestReuse
+}
+
+type RequestReuse = {
+  framing: string
+  prefix: Array<{ hash: string; bytes: number }>
 }
 
 type AccountPool = {
@@ -71,9 +79,12 @@ export async function fetchOpenAIWithWebSocket({
   const sessionId =
     headers[OPENAI_WEBSOCKET_SESSION_HEADER] ?? headers['x-session-affinity'] ?? headers['session-id']
   if (!sessionId) return httpFetch(input, httpInit)
+  if (init?.signal?.aborted) throw abortError(init.signal)
 
   const pool = accountPool({ accountKey, accessToken, endpoint: url.toString() })
-  const entry = pool.sessions.get(sessionId) ?? {
+  const reuse = requestReuse(body, headers)
+  const existing = pool.sessions.get(sessionId)
+  const entry = existing ?? takeWarmEntry(pool, reuse) ?? {
     lastUsedAt: Date.now(),
     busy: false,
     fallback: false,
@@ -112,7 +123,8 @@ export async function fetchOpenAIWithWebSocket({
       entry.busy = false
       entry.lastUsedAt = Date.now()
       entry.streamFailures = 0
-      if (event.type !== 'response.completed' && event.type !== 'response.done') invalidate(entry)
+      if (event.type === 'response.completed' || event.type === 'response.done') entry.reuse = reuse
+      else invalidate(entry)
     },
     onConnectionInvalid: (_error, closeCode) => {
       entry.busy = false
@@ -162,6 +174,58 @@ function parseBody(body: RequestInit['body']) {
   const parsed = errore.try((): JSONValue => JSON.parse(body))
   if (parsed instanceof Error || !isJSONObject(parsed)) return undefined
   return parsed
+}
+
+function digest(value: JSONValue | Record<string, string>) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}
+
+function requestReuse(body: JSONObject, headers: Record<string, string>): RequestReuse {
+  const { input, stream: _stream, background: _background, ...framing } = body
+  const transportHeaders = normalizeHeaders(withoutInternalHeaders({ headers })?.headers)
+  // Session labels select/attribute a request; they do not change its full input.
+  for (const name of ['x-session-affinity', 'x-session-id', 'session-id', 'x-opencode-session-id', 'content-length']) {
+    delete transportHeaders[name]
+  }
+  const items = body.previous_response_id || body.conversation
+    ? []
+    : Array.isArray(input) ? input : typeof input === 'string' ? [input] : []
+  return {
+    framing: digest({ body: framing, headers: transportHeaders }),
+    // Retain bounded hashes, not another copy of the conversation or its secrets.
+    prefix: items.slice(0, MAX_REUSE_PREFIX_ITEMS).map((item) => {
+      const serialized = JSON.stringify(item)
+      return { hash: createHash('sha256').update(serialized).digest('hex'), bytes: Buffer.byteLength(serialized) }
+    }),
+  }
+}
+
+function takeWarmEntry(pool: AccountPool, request: RequestReuse): PoolEntry | undefined {
+  if (request.prefix.length === 0) return
+  const now = Date.now()
+  let best: { sessionId: string; entry: PoolEntry; bytes: number } | undefined
+  for (const [sessionId, entry] of pool.sessions) {
+    if (
+      entry.busy || entry.fallback || entry.socket?.readyState !== WebSocket.OPEN ||
+      entry.connectedAt === undefined || now - entry.connectedAt >= MAX_CONNECTION_AGE_MS ||
+      now - entry.lastUsedAt >= IDLE_TIMEOUT_MS || entry.reuse?.framing !== request.framing
+    ) continue
+    let bytes = 0
+    for (let i = 0; i < Math.min(entry.reuse.prefix.length, request.prefix.length); i += 1) {
+      const previous = entry.reuse.prefix[i]
+      const incoming = request.prefix[i]
+      if (!previous || !incoming || previous.hash !== incoming.hash) break
+      bytes += incoming.bytes
+    }
+    if (bytes > 0 && (!best || bytes > best.bytes || (bytes === best.bytes && entry.lastUsedAt > best.entry.lastUsedAt))) {
+      best = { sessionId, entry, bytes }
+    }
+  }
+  if (!best) return
+  // Transfer one idle connection, never alias it between execution sessions.
+  // A parent resuming while the fork is busy opens its own independent socket.
+  pool.sessions.delete(best.sessionId)
+  return best.entry
 }
 
 function accountPool({
@@ -496,6 +560,7 @@ function invalidate(entry: PoolEntry) {
   if (entry.socket) terminate(entry.socket)
   entry.socket = undefined
   entry.connectedAt = undefined
+  entry.reuse = undefined
 }
 
 function terminate(socket: WebSocket) {

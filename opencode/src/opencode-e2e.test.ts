@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
+import { WebSocketServer } from 'ws'
 import {
   OPENCODE_AGENT_HEADER,
   OPENCODE_VARIANT_HEADER,
@@ -26,6 +27,7 @@ import {
   OPENAI_WEBSOCKET_TITLE_HEADER,
   addAccount,
   clearCooldowns,
+  loadState,
   markCooldown,
   savePreset,
 } from '@subrouter/cli'
@@ -70,6 +72,7 @@ function summarizeSessionEvents(events: Event[]) {
 
 type MockServer = {
   url: string
+  server: Server
   requests: Array<{ path: string; body: string }>
   close: () => Promise<void>
 }
@@ -101,6 +104,7 @@ async function startMockServer(
   const address = server.address()
   if (!address || typeof address === 'string') throw new Error('no address')
   return {
+    server,
     url: `http://127.0.0.1:${address.port}`,
     requests,
     close: async () => {
@@ -357,7 +361,9 @@ afterAll(async () => {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
-  await rm(home, { recursive: true, force: true })
+  // SDK close() signals the process without awaiting exit. Its final writes can
+  // briefly race recursive removal; use the filesystem's bounded contention retry.
+  await rm(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
 })
 
 describe('opencode + subrouter provider', () => {
@@ -756,5 +762,54 @@ describe('opencode + subrouter provider', () => {
     expect(names).not.toContain('write')
     expect(raw).toContain('apply_patch')
     expect(raw.includes('"name":"edit"') || raw.includes('"name": "edit"')).toBe(false)
+  }, 120_000)
+
+  test('automatically recovers a Codex service restart on the same account', async () => {
+    await clearCooldowns()
+    const sockets = new WebSocketServer({ server: openaiMock.server })
+    const authorizations: string[] = []
+    let requests = 0
+    sockets.on('connection', (socket, request) => {
+      authorizations.push(String(request.headers.authorization ?? ''))
+      socket.on('message', async (data) => {
+        requests += 1
+        if (requests === 1) {
+          socket.send(JSON.stringify({ type: 'response.created', response: { id: 'restart', created_at: 1, model: 'gpt-5.5' } }))
+          setTimeout(() => socket.close(1012, 'service restart'), 20)
+          return
+        }
+        // Reuse the HTTP fixture's canned provider events; all traffic stays local.
+        const response = await fetch(openaiMock.url + '/responses', { method: 'POST', body: data.toString() })
+        for (const line of (await response.text()).split('\n')) {
+          if (line.startsWith('data: ') && line !== 'data: [DONE]') socket.send(line.slice(6))
+        }
+      })
+    })
+    const client = createOpencodeClient({ baseUrl: server.url })
+    const events: Event[] = []
+    const cancellation = new AbortController()
+    const subscription = await client.event.subscribe({ query: { directory: projectDir }, signal: cancellation.signal })
+    const collected = (async () => {
+      for await (const event of subscription.stream) events.push(event)
+    })().catch(() => {})
+    try {
+      const session = await client.session.create({ query: { directory: projectDir }, body: { title: 'Codex service restart recovery' } })
+      const result = await client.session.prompt({
+        path: { id: session.data!.id }, query: { directory: projectDir },
+        body: { model: { providerID: 'subrouter', modelID: 'openai-only' }, parts: [{ type: 'text', text: 'say hi' }] },
+      })
+      expect(result.data?.info.error).toBeUndefined()
+      expect(result.data?.parts.filter((part) => part.type === 'text').map((part) => part.text).join('')).toContain('hello from openai')
+      expect(requests).toBe(2)
+      expect(authorizations).toEqual(['Bearer openai-access', 'Bearer openai-access'])
+      expect(summarizeSessionEvents(events).some((event) => event.status === 'retry')).toBe(true)
+      expect(summarizeSessionEvents(events).some((event) => event.type === 'session.error')).toBe(false)
+      expect(Object.keys((await loadState()).cooldowns)).toEqual([])
+    } finally {
+      cancellation.abort()
+      await collected
+      for (const socket of sockets.clients) socket.terminate()
+      await new Promise<void>((resolve) => sockets.close(() => resolve()))
+    }
   }, 120_000)
 })

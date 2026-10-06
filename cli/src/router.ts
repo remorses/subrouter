@@ -317,7 +317,7 @@ function cooldownRetryError({
 }
 
 // OpenCode MessageV2.fromError only retries APICallError. A raw timeout or
-// WebSocket 1006 drop becomes UnknownError and the retry regex misses it.
+// transient WebSocket drop becomes UnknownError and the retry regex misses it.
 export function asOpenCodeRetryableError(error: Error) {
   const aborted: boolean = errore.isAbortError(error)
   if (aborted) return error

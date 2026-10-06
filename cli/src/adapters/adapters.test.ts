@@ -210,14 +210,14 @@ describe('isTransportTimeout', () => {
 })
 
 describe('isWebSocketDisconnect', () => {
-  test('matches only a code 1006 abnormal close', () => {
+  test.each([1006, 1012])('recognizes transient close %s, including wrapped causes', (code) => {
     expect(
       isWebSocketDisconnect(
-        new Error('OpenAI WebSocket failed: closed before response completed (code 1006: Connection ended)'),
+        new Error(`OpenAI WebSocket failed: closed before response completed (code ${code}: Connection ended)`),
       ),
     ).toBe(true)
     const wrapped = new Error('stream error', {
-      cause: new Error('OpenAI WebSocket failed: closed before response completed (code 1006)'),
+      cause: new Error(`OpenAI WebSocket failed: closed before response completed (code ${code})`),
     })
     expect(isWebSocketDisconnect(wrapped)).toBe(true)
     expect(
@@ -225,6 +225,7 @@ describe('isWebSocketDisconnect', () => {
         new Error('OpenAI WebSocket failed: closed before response completed (code 1008: Policy violation)'),
       ),
     ).toBe(false)
+    expect(isWebSocketDisconnect(new Error('closed before response completed (code 10120)'))).toBe(false)
     expect(isWebSocketDisconnect(new Error('bad request'))).toBe(false)
   })
 })

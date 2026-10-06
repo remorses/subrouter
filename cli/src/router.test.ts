@@ -320,8 +320,8 @@ describe('RouterModel failover', () => {
     expect(anthropicMock.requests.length).toBe(2)
     expect(anthropicMock.requests.map((r) => r.authorization)).toEqual(['Bearer acc2', 'Bearer acc1'])
     expect(anthropicMock.requests.map((r) => r.userAgent)).toEqual([
-      'claude-cli/2.1.257 (external, cli)',
-      'claude-cli/2.1.257 (external, cli)',
+      'claude-cli/2.1.280 (external, cli)',
+      'claude-cli/2.1.280 (external, cli)',
     ])
     expect(opencodeMock.requests[0]!.authorization).toBe('Bearer zen-key')
     expect(opencodeMock.requests[0]!.opencodeSession).toMatch(

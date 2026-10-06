@@ -11,7 +11,7 @@ import http from 'node:http'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import WebSocket, { WebSocketServer } from 'ws'
 import { RouterModel } from '../router.ts'
 import { addAccount, loadState, savePreset, type StoredAccount } from '../store.ts'
@@ -26,6 +26,34 @@ type CodexServer = Awaited<ReturnType<typeof startCodexServer>>
 const callOptions: LanguageModelV3CallOptions = {
   prompt: [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
   headers: { [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-1' },
+}
+
+function forkOptions(session: string, text: string): LanguageModelV3CallOptions {
+  return {
+    prompt: [
+      { role: 'system', content: 'Shared inert reference context. '.repeat(64) },
+      { role: 'user', content: [{ type: 'text', text }] },
+    ],
+    headers: {
+      [OPENAI_WEBSOCKET_SESSION_HEADER]: session,
+      'x-session-affinity': session,
+      'X-Session-Id': session,
+      'x-opencode-session-id': session,
+    },
+  }
+}
+
+function requestText(request: JSONObject) {
+  if (!Array.isArray(request.input)) throw new Error('Expected full request input')
+  const message = request.input.at(-1)
+  if (!message || typeof message !== 'object' || Array.isArray(message) || !Array.isArray(message.content)) {
+    throw new Error('Expected a final user message')
+  }
+  const content = message.content[0]
+  if (!content || typeof content !== 'object' || Array.isArray(content) || typeof content.text !== 'string') {
+    throw new Error('Expected user text')
+  }
+  return content.text
 }
 
 function oauthAccount({ accountId, access }: { accountId: string; access: string }): StoredAccount {
@@ -152,6 +180,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   closeOpenAIWebSockets()
   delete process.env.SUBROUTER_OPENAI_BASE_URL
   for (const server of servers) await closeCodexServer(server)
@@ -160,6 +189,164 @@ afterEach(async () => {
 })
 
 describe('OpenAI Codex WebSocket transport', () => {
+  test('reuses a compatible idle parent connection for a fork without changing either full request', async () => {
+    const server = await startCodexServer(({ request, socket }) => {
+      const text = requestText(request)
+      for (const event of completionEvents({ text, responseId: text })) socket.send(JSON.stringify(event))
+    })
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    const account = oauthAccount({ accountId: 'account-1', access: 'access-1' })
+    const model = openaiAdapter.createModel({ modelId: 'gpt-test', account, persist: async () => {} })
+
+    for (const [session, text] of [['parent', 'parent-input'], ['fork', 'fork-input'], ['parent', 'parent-resumed']] as const) {
+      expect(await textFromStream((await model.doStream(forkOptions(session, text))).stream)).toBe(text)
+    }
+    expect(server.connections).toHaveLength(1)
+    expect(server.httpRequests).toEqual([])
+    expect(server.websocketRequests.map(requestText)).toEqual(['parent-input', 'fork-input', 'parent-resumed'])
+    expect(server.websocketRequests.every((request) => !('previous_response_id' in request))).toBe(true)
+    expect(server.websocketRequests.map((request) => request.input)).toEqual([
+      [{ role: 'system', content: 'Shared inert reference context. '.repeat(64) },
+        { role: 'user', content: [{ type: 'input_text', text: 'parent-input' }] }],
+      [{ role: 'system', content: 'Shared inert reference context. '.repeat(64) },
+        { role: 'user', content: [{ type: 'input_text', text: 'fork-input' }] }],
+      [{ role: 'system', content: 'Shared inert reference context. '.repeat(64) },
+        { role: 'user', content: [{ type: 'input_text', text: 'parent-resumed' }] }],
+    ])
+  })
+
+  test('preserves simultaneous parent and fork streams and isolates fork cancellation after idle reuse', async () => {
+    const held = new Map<string, WebSocket>()
+    const server = await startCodexServer(({ request, socket }) => {
+      const text = requestText(request)
+      const events = completionEvents({ text, responseId: text })
+      if (text === 'warm') {
+        for (const event of events) socket.send(JSON.stringify(event))
+      } else {
+        held.set(text, socket)
+        socket.send(JSON.stringify(events[0]))
+      }
+    })
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    const account = oauthAccount({ accountId: 'account-1', access: 'access-1' })
+    const model = openaiAdapter.createModel({ modelId: 'gpt-test', account, persist: async () => {} })
+    expect(await textFromStream((await model.doStream(forkOptions('parent', 'warm'))).stream)).toBe('warm')
+    const cancellation = new AbortController()
+    const fork = await model.doStream({ ...forkOptions('fork', 'fork-active'), abortSignal: cancellation.signal })
+    const forkResult = textFromStream(fork.stream).catch((error: unknown) => error)
+    const parent = await model.doStream(forkOptions('parent', 'parent-active'))
+    const parentResult = textFromStream(parent.stream)
+
+    expect(server.connections).toHaveLength(2)
+    expect(held.get('parent-active')).not.toBe(held.get('fork-active'))
+    cancellation.abort()
+    expect(errore.isAbortError(await forkResult)).toBe(true)
+    const parentSocket = held.get('parent-active')
+    if (!parentSocket) throw new Error('Parent connection missing')
+    expect(parentSocket.readyState).toBe(WebSocket.OPEN)
+    for (const event of completionEvents({ text: 'parent-active', responseId: 'parent-active' }).slice(1)) {
+      parentSocket.send(JSON.stringify(event))
+    }
+    expect(await parentResult).toBe('parent-active')
+    expect(server.httpRequests).toEqual([])
+  })
+
+  test.each(['prefix', 'model', 'tools', 'headers', 'response-reference'])('does not reuse incompatible %s across sessions', async (difference) => {
+    const server = await startCodexServer(({ socket }) => {
+      for (const event of completionEvents({ text: 'ok', responseId: 'ok' })) socket.send(JSON.stringify(event))
+    })
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    const account = oauthAccount({ accountId: 'account-1', access: 'access-1' })
+    const model = openaiAdapter.createModel({ modelId: 'gpt-test', account, persist: async () => {} })
+    await textFromStream((await model.doStream(forkOptions('parent', 'parent'))).stream)
+    const options = forkOptions('fork', 'fork')
+    if (difference === 'prefix') options.prompt[0] = { role: 'system', content: 'Different context' }
+    if (difference === 'tools') options.tools = [{ type: 'function', name: 'lookup', description: 'Lookup', inputSchema: { type: 'object' } }]
+    if (difference === 'headers') options.headers = { ...options.headers, 'x-codex-turn-state': 'different-turn' }
+    if (difference === 'response-reference') options.providerOptions = { openai: { previousResponseId: 'other-response' } }
+    const target = difference === 'model'
+      ? openaiAdapter.createModel({ modelId: 'gpt-other', account, persist: async () => {} })
+      : model
+    expect(await textFromStream((await target.doStream(options)).stream)).toBe('ok')
+    expect(server.connections).toHaveLength(2)
+    expect(server.httpRequests).toEqual([])
+  })
+
+  test.each(['account', 'token', 'endpoint'])('keeps warm connections isolated by %s', async (difference) => {
+    const respond = ({ socket }: { socket: WebSocket }) => {
+      for (const event of completionEvents({ text: 'ok', responseId: 'ok' })) socket.send(JSON.stringify(event))
+    }
+    const server = await startCodexServer(respond)
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    const account = oauthAccount({ accountId: 'account-1', access: 'access-1' })
+    const model = openaiAdapter.createModel({ modelId: 'gpt-test', account, persist: async () => {} })
+    await textFromStream((await model.doStream(forkOptions('parent', 'parent'))).stream)
+    const otherServer = difference === 'endpoint' ? await startCodexServer(respond) : server
+    if (otherServer !== server) servers.push(otherServer)
+    process.env.SUBROUTER_OPENAI_BASE_URL = otherServer.url
+    const otherAccount = oauthAccount({
+      accountId: difference === 'account' ? 'account-2' : 'account-1',
+      access: difference === 'token' ? 'access-2' : 'access-1',
+    })
+    const other = openaiAdapter.createModel({ modelId: 'gpt-test', account: otherAccount, persist: async () => {} })
+    expect(await textFromStream((await other.doStream(forkOptions('fork', 'fork'))).stream)).toBe('ok')
+    expect(servers.flatMap((item) => item.connections)).toHaveLength(2)
+  })
+
+  test('does not adopt an expired idle warm connection', async () => {
+    const server = await startCodexServer(({ socket }) => {
+      for (const event of completionEvents({ text: 'ok', responseId: 'ok' })) socket.send(JSON.stringify(event))
+    })
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    const account = oauthAccount({ accountId: 'account-1', access: 'access-1' })
+    const model = openaiAdapter.createModel({ modelId: 'gpt-test', account, persist: async () => {} })
+    await textFromStream((await model.doStream(forkOptions('parent', 'parent'))).stream)
+    vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 6 * 60 * 1000)
+    expect(await textFromStream((await model.doStream(forkOptions('fork', 'fork'))).stream)).toBe('ok')
+    expect(server.connections).toHaveLength(2)
+  })
+
+  test('keeps an owning session response reference on its existing connection', async () => {
+    const server = await startCodexServer(({ socket }) => {
+      for (const event of completionEvents({ text: 'ok', responseId: 'ok' })) socket.send(JSON.stringify(event))
+    })
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    const account = oauthAccount({ accountId: 'account-1', access: 'access-1' })
+    const model = openaiAdapter.createModel({ modelId: 'gpt-test', account, persist: async () => {} })
+    await textFromStream((await model.doStream(forkOptions('parent', 'parent'))).stream)
+    await textFromStream((await model.doStream({
+      ...forkOptions('parent', 'follow-up'),
+      providerOptions: { openai: { previousResponseId: 'ok' } },
+    })).stream)
+    expect(server.connections).toHaveLength(1)
+    expect(server.websocketRequests[1]).toHaveProperty('previous_response_id', 'ok')
+  })
+
+  test('an already-aborted fork does not take or close the parent warm connection', async () => {
+    const server = await startCodexServer(({ socket }) => {
+      for (const event of completionEvents({ text: 'ok', responseId: 'ok' })) socket.send(JSON.stringify(event))
+    })
+    servers.push(server)
+    process.env.SUBROUTER_OPENAI_BASE_URL = server.url
+    const account = oauthAccount({ accountId: 'account-1', access: 'access-1' })
+    const model = openaiAdapter.createModel({ modelId: 'gpt-test', account, persist: async () => {} })
+    await textFromStream((await model.doStream(forkOptions('parent', 'parent'))).stream)
+    const cancellation = new AbortController()
+    cancellation.abort()
+    await expect(Promise.resolve(model.doStream({
+      ...forkOptions('fork', 'fork'), abortSignal: cancellation.signal,
+    }))).rejects.toSatisfy(errore.isAbortError)
+    expect(await textFromStream((await model.doStream(forkOptions('parent', 'resumed'))).stream)).toBe('ok')
+    expect(server.connections).toHaveLength(1)
+    expect(server.httpRequests).toEqual([])
+  })
+
   test('uses and reuses WebSocket by default across model instances', async () => {
     let count = 0
     const server = await startCodexServer(({ socket }) => {
@@ -303,6 +490,13 @@ describe('OpenAI Codex WebSocket transport', () => {
       cooldowns: [] satisfies string[],
     },
     {
+      name: 'WebSocket service restart',
+      fail: (socket: WebSocket) => socket.close(1012, 'service restart'),
+      message: 'closed before response completed (code 1012',
+      statusCode: undefined,
+      cooldowns: [] satisfies string[],
+    },
+    {
       name: 'Grok-style 403',
       fail: (socket: WebSocket) =>
         socket.send(
@@ -403,8 +597,8 @@ describe('OpenAI Codex WebSocket transport', () => {
     expect(Object.keys((await loadState()).cooldowns)).toEqual(['openai:account-b'])
   })
 
-  test('retries a WebSocket 1006 drop after visible output without cooling down', async () => {
-    // Unlike a quota/auth error, a transient 1006 drop is retryable even after
+  test.each([1006, 1012])('retries a WebSocket %s drop after visible output without cooling down', async (code) => {
+    // Unlike a quota/auth error, a transient transport drop is retryable even after
     // output has started, so OpenCode restarts the turn on the same account.
     const server = await startCodexServer(({ authorization, socket }) => {
       if (authorization !== 'Bearer access-b') {
@@ -416,7 +610,7 @@ describe('OpenAI Codex WebSocket transport', () => {
       for (const event of completionEvents({ text: 'partial', responseId: 'partial-1' }).slice(0, 4)) {
         socket.send(JSON.stringify(event))
       }
-      setTimeout(() => socket.terminate(), 20)
+      setTimeout(() => code === 1006 ? socket.terminate() : socket.close(code, 'service restart'), 20)
     })
     servers.push(server)
     process.env.SUBROUTER_OPENAI_BASE_URL = server.url
@@ -433,7 +627,7 @@ describe('OpenAI Codex WebSocket transport', () => {
     if (!APICallError.isInstance(error)) throw error
     expect(error.isRetryable).toBe(true)
     expect(error.statusCode).toBeUndefined()
-    expect(error.message).toContain('closed before response completed (code 1006')
+    expect(error.message).toContain(`closed before response completed (code ${code}`)
     expect(parts.flatMap((part) => (part.type === 'text-delta' ? [part.delta] : []))).toEqual(['partial'])
     expect(server.connections.map((item) => item.authorization)).toEqual(['Bearer access-b'])
     expect(Object.keys((await loadState()).cooldowns)).toEqual([])
