@@ -56,15 +56,15 @@ The built-in **`default` preset** ranks the newest model from each provider. Whe
 
 Choose **opencode Go** or **Pi**.
 
-For opencode Go, add `@subrouter/opencode` to the `plugin` array in `~/.config/opencode/opencode.json`:
+For OpenCode v2, add `@subrouter/opencode` to the `plugins` array in `~/.config/opencode/opencode.json`:
 
 ```json
 {
-  "plugin": ["@subrouter/opencode"]
+  "plugins": ["@subrouter/opencode"]
 }
 ```
 
-Restart opencode Go, then pick the model `subrouter/default`.
+Restart OpenCode, then pick the model `subrouter/default`.
 
 For Pi, install the extension and pick the same model:
 
@@ -228,6 +228,14 @@ npx @subrouter/cli preset remove [name] [--force]
 
 The order passed to `--models` is the fallback order. Append `#variant` to pin reasoning effort for that candidate. `preset create` checks the variant against models.dev. A session `--variant` or `subrouter/<name>#high` still wins over the preset pin. Every preset appears in both harnesses as `subrouter/<name>`.
 
+For a **GPT-only OpenCode preset**, prefix its name with `gpt-`. OpenCode detects GPT models from the public model ID, so this enables its GPT system prompt and replaces `edit` and `write` with `patch`:
+
+```bash
+subrouter preset create gpt-codex --models 'openai/gpt-5.5#high'
+```
+
+Use `subrouter/gpt-codex` in OpenCode. Do not use the prefix on mixed-provider fallback presets because OpenCode keeps the GPT prompt and tools after Subrouter changes providers.
+
 ### Status and cooldowns
 
 ```bash
@@ -273,11 +281,13 @@ The window is **30 minutes**. After that the callback server closes and curl rep
 
 The `default` preset is built in. It ranks the newest model from each provider in the order shown above. When Subrouter resolves a request, it skips providers without stored accounts. Create a preset named `default` to override it.
 
-## opencode Go plugin
+## OpenCode plugin
 
-`@subrouter/opencode` registers a `subrouter` provider inside opencode Go via the plugin `config` hook. Each preset becomes a model. For installation, see [Connect your harness](#3-connect-your-harness).
+`@subrouter/opencode` is an OpenCode v2 plugin (`Plugin.define({ id: 'subrouter' })`). Setup registers the `subrouter` catalog, OAuth login, request headers, and live-route cleanup. Each preset becomes a model. For installation, see [Connect your harness](#3-connect-your-harness).
 
-Pick `subrouter/default` (or any `subrouter/<preset>`) as the model. Presets created after opencode Go starts appear on the next opencode Go restart.
+Pick `subrouter/default` (or any `subrouter/<preset>`) as the model. Presets created after OpenCode starts appear on the next OpenCode restart.
+
+OpenCode login only covers **OAuth** subscriptions: Anthropic, OpenAI, xAI, GitHub Copilot, and Poe. Browser flows use pasted redirects because OpenCode v2 does not expose cancellation to plugins. API-key providers (`opencode-go`, MiniMax, Kimi, Z.ai, Alibaba) stay on `subrouter login`. OpenCode v2 has no UI-only ignored-notice API, so cooldown fallbacks stay in Subrouter logs and are not posted as session messages.
 
 ### Use cases
 
@@ -381,7 +391,7 @@ subrouter completions uninstall
 This pnpm workspace has four packages:
 
 - `cli/` — `@subrouter/cli`: account stores, presets, cooldown state, provider adapters, and the routing engine (`RouterModel`, an AI SDK `LanguageModelV3`)
-- `opencode/` — `@subrouter/opencode`: the opencode Go plugin plus the provider entry opencode Go loads
+- `opencode/` — `@subrouter/opencode`: the OpenCode v2 plugin plus the `aisdk:file://` provider entry OpenCode loads
 - `pi/` — `@subrouter/pi`: a native Pi provider that delegates to Pi's provider streams without format translation
 - `website/` — private `subrouter-website`: the Holocron documentation site for subrouter.org
 
@@ -393,7 +403,7 @@ pnpm test
 
 **Tests never hit real APIs.** Unit tests fake provider endpoints with local HTTP servers.
 
-The e2e tests boot real opencode Go and Pi harness runtimes, point every adapter at local endpoints via `SUBROUTER_*_BASE_URL`, and assert that a rate-limited provider cycles to the fallback through each complete pipeline. Pi uses in-memory auth, model, settings, and session stores, so tests never read or write the real Pi config.
+The e2e tests boot a real pinned OpenCode v2 2.0.2 server and a Pi harness runtime, point every adapter at local endpoints via `SUBROUTER_*_BASE_URL`, and assert that a rate-limited provider cycles to the fallback through each complete pipeline. OpenCode tests isolate `HOME`, `XDG_*`, `OPENCODE_CONFIG*`, and `SUBROUTER_HOME`. Pi uses in-memory auth, model, settings, and session stores, so tests never read or write the real Pi config.
 
 ## Environment variables
 

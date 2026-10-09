@@ -730,6 +730,7 @@ cli
       entries that subrouter falls through when subscriptions hit limits.
       Append \`#variant\` to pin reasoning effort, for example \`openai/gpt-5.5#high\`.
       Model IDs and variants are validated against models.dev before saving.
+      Prefix GPT-only preset names with \`gpt-\` to enable OpenCode's GPT prompt and patch tool.
       Use the preset in opencode as model \`subrouter/<name>\`.
     `,
   )

@@ -620,7 +620,7 @@ export class RouterModel implements LanguageModelV3 {
       if (inspected.ok) {
         this.affinity?.select(affinityKey, candidate)
         const sessionID = headers.get(OPENAI_WEBSOCKET_SESSION_HEADER)
-        if (sessionID && !headers.get(OPENAI_WEBSOCKET_TITLE_HEADER)) {
+        if (sessionID && headers.get(ROUTE_AFFINITY_HEADER)) {
           await setLiveRoute({
             sessionID,
             preset: this.modelId,
@@ -953,10 +953,8 @@ function candidateCallOptions({
 }
 
 /**
- * AI SDK provider factory. OpenCode imports the provider module and calls the
- * first export starting with `create`, then `sdk.languageModel(modelId)`.
- * GPT presets spoof a `gpt-*` api id so OpenCode prefers apply_patch;
- * `presetByApiId` maps that id back to the preset name.
+ * AI SDK provider factory. Harness adapters can map an API id back to a
+ * preset when their public model id differs from the routed model id.
  */
 export function createSubrouter(
   options: {

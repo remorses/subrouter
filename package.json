@@ -10,8 +10,7 @@
   "devDependencies": {
     "typescript": "^5.9.2",
     "tsx": "^4.20.5",
-    "vitest": "^3.2.4",
-    "opencode-ai": "^1.18.23"
+    "vitest": "^3.2.4"
   },
   "pnpm": {
     "packageExtensions": {
@@ -22,7 +21,7 @@
       }
     },
     "onlyBuiltDependencies": [
-      "opencode-ai",
+      "@opencode/cli",
       "esbuild",
       "msgpackr-extract"
     ]

@@ -43,7 +43,7 @@ pnpm workspace, flat `./*` packages. **One root README only, no per-package READ
   - `src/adapters/` — one adapter per provider (login flow, token refresh, fetch wrapper, `createModel`). Shared failure classification in `adapters/index.ts`.
   - `src/router.ts` — `RouterModel` (AI SDK `LanguageModelV3`) + `createSubrouter` provider factory. Resolves a preset to ranked candidates, skips cooldowns, fails over on rotate-worthy errors.
   - `src/cli.ts` — goke CLI (`login`, `import opencode`, `logout`, `account`, `preset`, `status`, `cooldown clear`).
-- `opencode/` — npm package `@subrouter/opencode`. Plugin `config` hook injects a `subrouter` provider whose `npm` field is a `file://` URL to the bundled `provider.js`; every preset becomes a model (`subrouter/<preset>`). Visible provider name is `subrouter.org`. Model labels stay as preset names, while context limits and `experimental.chat.system.transform` follow the first live routed candidate. GPT candidates set a unique `gpt-*` `id` so OpenCode prefers `apply_patch` over `edit`/`write`; `createSubrouter` maps that id back to the preset. Only plugin initializers may be exported from `src/index.ts` (opencode calls every export as a plugin).
+- `opencode/` — npm package `@subrouter/opencode`. Default export is `Plugin.define({ id: 'subrouter' })`. Setup uses `ctx.catalog.transform` with package `aisdk:file://...` to bundled `provider.js`, which must export `model(modelID, settings)`. Every preset becomes a model (`subrouter/<preset>`). Visible provider name is `subrouter.org`. Model labels stay as preset names, while context limits and `ctx.session.hook('context')` follow the first live routed candidate. OpenCode detects GPT behavior from the public model id: prefix GPT-only presets with `gpt-` to enable the GPT prompt and `patch`. Never use that prefix for mixed-provider presets. OpenCode login is OAuth-only. Do not use `console.*` in plugin code.
 - `pi/` — npm package `@subrouter/pi`. Registers one native Pi provider and one logical model per preset. It selects accounts, then delegates to Pi's built-in provider streams without translating events.
 - `website/` — Holocron docs site deployed to subrouter.org.
 
@@ -128,7 +128,7 @@ OpenCode does not throw a custom cooldown class into the provider. Rate limits a
 
 ## Harness plugins
 
-- **opencode** (`@subrouter/opencode`): done. Users register it in the `plugin` array in `~/.config/opencode/opencode.json`. It exports two plugins: `subrouterPlugin` (config hook, registers the provider) and `subrouterAuthPlugin` (auth hook, drives login).
+- **opencode** (`@subrouter/opencode`): done. Users register it in the `plugins` array in `~/.config/opencode/opencode.json`. One default export: `Plugin.define({ id: 'subrouter' })`. Catalog, OAuth login, `model.request` headers, context rewrite, and live-route cleanup all live in `setup()`. API-key providers stay on `subrouter login`. OpenCode v2 has no UI-only ignored-notice API, so cooldown fallbacks are not posted as session messages.
 - **pi** (`@subrouter/pi`): registers logical preset models through the current `@earendil-works/pi-*` APIs. It forwards native Pi stream events unchanged. It retries another candidate only before output starts and never reads Pi's auth store.
 - **kimaki**: registers `@subrouter/opencode` next to its own legacy rotation plugins and lists `subrouter` first in Discord `/login`. Its legacy anthropic/openai/xai plugins are marked LEGACY but not deleted, because opencode ships no Claude Pro/Max auth of its own and plain `anthropic/*` model ids would break.
 
@@ -152,10 +152,10 @@ When you need to see how OpenCode plugins, logging, retries, or provider loading
 
 - GitHub: https://github.com/anomalyco/opencode
 - Local cache: `bunx opensrc path anomalyco/opencode`
-- Plugin logging: https://opencode.ai/docs/plugins/#logging (`client.app.log`, never `console.log`)
+- Plugin logging: v2 `Plugin.Context` has no `app.log`. Keep plugin logging no-op rather than `console.*`.
 - Runtime logs use a callback passed through provider options into `createSubrouter()` and `RouterModel`. Never use `globalThis`, `Symbol.for`, module-level sinks, stdout, or stderr for library logs.
 - Retry headers: https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/session/retry.ts
-- Provider factory load: `packages/opencode/src/provider/provider.ts` calls the first export starting with `create`
+- Provider package load: OpenCode v2 requires `aisdk:file://...` and `export function model(modelID, settings)`. `createSubrouter` remains the AISDK factory used by that `model()` export.
 
 ## AI SDK version pinning
 
@@ -193,7 +193,7 @@ The site is served from two Cloudflare custom domains, `subrouter.org` and `www.
 
 - **No real API calls in tests.** Fake provider endpoints with local HTTP servers; every adapter has a matching `SUBROUTER_<PROVIDER>_BASE_URL` override. `SUBROUTER_MODELS_DEV_URL` points `loadModelsDevCatalog()` at a local catalog.
 - `cli/src/router.test.ts` covers rotation order, cooldown recording, non-rotate errors passing through, exhaustion errors.
-- `opencode/src/opencode-e2e.test.ts` boots a real `opencode serve` (devDep `opencode-ai`) with fake endpoints and asserts a 429 provider is cycled to the fallback through the whole pipeline. It loads `opencode/dist/provider.js`, so run `pnpm build` before tests.
+- `opencode/src/opencode-e2e.test.ts` boots a real pinned `@opencode/cli` 2.0.2 `opencode2 serve` with fake endpoints. Prompt is inbox admission, so tests wait on `session.execution.*` and inspect projected messages. Isolate `HOME`, `XDG_*`, `OPENCODE_CONFIG*`, and `SUBROUTER_HOME`. It loads `opencode/dist`, so run `pnpm build` before tests.
 - `pi/src/pi-e2e.test.ts` loads `pi/dist/index.js` through Pi's real `ResourceLoader`, uses in-memory Pi stores and local HTTP endpoints, and covers account rotation, cross-provider fallback, non-rotate errors, and partial-stream safety.
 - Tests use temp `SUBROUTER_HOME` dirs; never touch the real `~/.subrouter`. `store.ts` throws if Vitest would resolve to the real home. Do not `delete process.env.SUBROUTER_HOME` in `afterEach`; a late write then hits `~/.subrouter`.
 
@@ -211,13 +211,13 @@ Automated tests use fake HTTP servers. After changing adapters, the router, or t
 pnpm --filter @subrouter/cli build
 ```
 
-The machine plugin path is already `subrouter/opencode/src/index.ts` in `~/.config/opencode/opencode.json`. Do not use `npx @subrouter/opencode`.
+Prefer the workspace plugin path in `plugins` (`subrouter/opencode/src/index.ts` or `opencode/dist`). Do not use `npx @subrouter/opencode`. Global `opencode2` may be an older beta; automated tests must use the pinned local `@opencode/cli` 2.0.2 binary.
 
 ### Isolate vs cycle
 
 Protocol bugs hide if the preset failovers to Anthropic. Use **two** runs:
 
-1. **Isolate Codex.** `-m subrouter/openai-only` has no fallback. A follow-up crash is a real Codex bug.
+1. **Isolate Codex.** `-m subrouter/gpt-openai-only` has no fallback. A follow-up crash is a real Codex bug.
 2. **Prove cycling.** `-m subrouter/openai-first` ranks OpenAI then Anthropic. A usage-limit on Codex must continue on Anthropic.
 
 Check who is live before the cycle run:
@@ -235,7 +235,7 @@ One user message that forces a tool, then a second model call:
 
 ```bash
 opencode run --print-logs --log-level INFO --auto \
-  -m subrouter/openai-only \
+  -m subrouter/gpt-openai-only \
   --dir /tmp \
   --title 'subrouter-codex-followup' \
   'Use the bash tool to run pwd. Then reply with only the last path segment of that directory.'
@@ -243,7 +243,7 @@ opencode run --print-logs --log-level INFO --auto \
 
 Pass criteria:
 
-- logs show `providerID=subrouter modelID=openai-only`
+- logs show `providerID=subrouter modelID=gpt-openai-only`
 - `pwd` runs
 - a second `stream` line happens
 - **no** `Items are not persisted when store is set to false`
@@ -294,7 +294,7 @@ pnpm --filter @subrouter/cli build
 pnpm --filter @subrouter/pi build
 ```
 
-Load `pi/dist/index.js` with `-e`. Isolate vs cycle uses the same presets as OpenCode (`openai-only`, `openai-first`).
+Load `pi/dist/index.js` with `-e`. Isolate vs cycle uses the same presets as OpenCode (`gpt-openai-only`, `openai-first`).
 
 Anthropic Claude Pro/Max OAuth **400s** Pi's default system prompt (`operating inside pi`, `Pi documentation`). The plugin strips that identity before the native Anthropic stream. A live Anthropic fallback that still returns extra-usage is a **prompt leak**, not a quota rotate.
 

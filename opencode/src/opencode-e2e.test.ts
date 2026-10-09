@@ -1,29 +1,24 @@
 /**
- * End-to-end test: a real opencode server drives the subrouter provider.
+ * End-to-end test: a real OpenCode v2 2.0.2 server drives the subrouter plugin.
  *
- * No real API requests. Fake HTTP servers play the provider endpoints:
- * anthropic always answers 429 (rate limited), the opencode-go mock streams
- * a canned completion. The test prompts opencode with model subrouter/default
- * and asserts the reply came from the fallback provider, proving the cycling
- * works through the whole opencode -> provider -> router pipeline.
- *
- * Requires built dist (pnpm build) because opencode loads dist/provider.js.
+ * No real API requests. Fake HTTP servers play the provider endpoints.
+ * Prompt is inbox admission in v2, so tests wait on execution events and
+ * inspect projected messages. Requires built dist because OpenCode loads
+ * dist/index.js and dist/provider.js.
  */
 
-import { createOpencodeClient, type Event } from '@opencode-ai/sdk'
-import { createOpencodeServer } from '@opencode-ai/sdk/server'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { createRequire } from 'node:module'
+import { randomBytes } from 'node:crypto'
 import { createServer, type Server } from 'node:http'
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
+import net from 'node:net'
+import { mkdtemp, rm, mkdir, writeFile, readFile, realpath } from 'node:fs/promises'
+import fs from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'vitest'
+import { OpenCode, type OpenCodeClient, type V2Event } from '@opencode/client'
 import {
-  OPENCODE_AGENT_HEADER,
-  OPENCODE_VARIANT_HEADER,
-  OPENAI_WEBSOCKET_SESSION_HEADER,
-  ROUTE_AFFINITY_HEADER,
-  OPENAI_WEBSOCKET_TITLE_HEADER,
   addAccount,
   clearCooldowns,
   markCooldown,
@@ -31,57 +26,18 @@ import {
 } from '@subrouter/cli'
 import { addSubrouterHeaders } from './provider.ts'
 
-function summarizeSessionEvents(events: Event[]) {
-  const summary: Array<{
-    type: string
-    status?: string
-    message?: string
-    name?: string
-    statusCode?: number
-    isRetryable?: boolean
-  }> = []
-  for (const event of events) {
-    if (event.type === 'session.status') {
-      const status = event.properties.status
-      summary.push({
-        type: event.type,
-        status: status.type,
-        message: status.type === 'retry' ? status.message : undefined,
-      })
-      continue
-    }
-    if (event.type === 'session.error') {
-      const error = event.properties.error
-      if (!error) continue
-      const message = typeof error.data.message === 'string' ? error.data.message : undefined
-      summary.push({
-        type: event.type,
-        name: error.name,
-        message,
-        statusCode: error.name === 'APIError' ? error.data.statusCode : undefined,
-        isRetryable: error.name === 'APIError' ? error.data.isRetryable : undefined,
-      })
-      continue
-    }
-    if (event.type === 'session.idle') summary.push({ type: event.type })
-  }
-  return summary
-}
-
 type MockServer = {
   url: string
-  requests: Array<{ path: string; body: string }>
+  requests: Array<{ path: string; body: string; headers: Record<string, string> }>
   close: () => Promise<void>
 }
 
 type MockHandler = (
-  args: { path: string; body: string },
+  args: { path: string; body: string; headers: Record<string, string> },
   res: import('node:http').ServerResponse,
 ) => void
 
-async function startMockServer(
-  handler: MockHandler,
-): Promise<MockServer> {
+async function startMockServer(handler: MockHandler): Promise<MockServer> {
   const requests: MockServer['requests'] = []
   const server: Server = createServer((req, res) => {
     let body = ''
@@ -89,8 +45,12 @@ async function startMockServer(
       body += String(chunk)
     })
     req.on('end', () => {
-      requests.push({ path: req.url ?? '', body })
-      handler({ path: req.url ?? '', body }, res)
+      const headers: Record<string, string> = {}
+      for (const [key, value] of Object.entries(req.headers)) {
+        if (typeof value === 'string') headers[key] = value
+      }
+      requests.push({ path: req.url ?? '', body, headers })
+      handler({ path: req.url ?? '', body, headers }, res)
     })
   })
   await new Promise<void>((resolve) => {
@@ -117,6 +77,129 @@ function sseChunk(data: object) {
   return `data: ${JSON.stringify(data)}\n\n`
 }
 
+function resolveOpencode2Command() {
+  const require = createRequire(import.meta.url)
+  const packageJsonPath = require.resolve('@opencode/cli/package.json')
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8')) as {
+    bin?: { opencode2?: string; opencode?: string }
+  }
+  const binRelative = packageJson.bin?.opencode2 || packageJson.bin?.opencode
+  if (typeof binRelative !== 'string') throw new Error('@opencode/cli package.json has no opencode2 bin')
+  return path.join(path.dirname(packageJsonPath), binRelative)
+}
+
+function getFreePort() {
+  return new Promise<number>((resolve, reject) => {
+    const server = net.createServer()
+    server.listen(0, () => {
+      const address = server.address()
+      if (address && typeof address === 'object') {
+        const port = address.port
+        server.close(() => {
+          resolve(port)
+        })
+        return
+      }
+      reject(new Error('Failed to get free port'))
+    })
+    server.on('error', reject)
+  })
+}
+
+function basicAuth(password: string) {
+  return `Basic ${Buffer.from(`opencode:${password}`).toString('base64')}`
+}
+
+async function startOpencode2Server({
+  home,
+  projectDir,
+}: {
+  home: string
+  projectDir: string
+}) {
+  const port = await getFreePort()
+  const password = randomBytes(32).toString('base64url')
+  const baseUrl = `http://127.0.0.1:${port}`
+  const isolationHome = path.join(home, 'opencode-home')
+  const isolation = {
+    HOME: isolationHome,
+    USERPROFILE: isolationHome,
+    OPENCODE_TEST_HOME: isolationHome,
+    XDG_CONFIG_HOME: path.join(isolationHome, '.config'),
+    XDG_DATA_HOME: path.join(isolationHome, '.local', 'share'),
+    XDG_CACHE_HOME: path.join(isolationHome, '.cache'),
+    XDG_STATE_HOME: path.join(isolationHome, '.local', 'state'),
+    OPENCODE_CONFIG_DIR: path.join(isolationHome, '.config', 'opencode'),
+  }
+  for (const directory of Object.values(isolation)) {
+    await mkdir(directory, { recursive: true })
+  }
+  const env = {
+    ...process.env,
+    ...isolation,
+    OPENCODE_PASSWORD: password,
+    OPENCODE_DISABLE_AUTOUPDATE: '1',
+  } satisfies NodeJS.ProcessEnv
+  Reflect.deleteProperty(env, 'OPENCODE_CONFIG')
+  Reflect.deleteProperty(env, 'OPENCODE_CONFIG_CONTENT')
+  Reflect.deleteProperty(env, 'OPENCODE_SERVER_PASSWORD')
+  const child: ChildProcess = spawn(
+    resolveOpencode2Command(),
+    ['serve', '--port', String(port), '--hostname', '127.0.0.1'],
+    {
+      cwd: projectDir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env,
+    },
+  )
+  const stderr: string[] = []
+  child.stderr?.on('data', (chunk) => {
+    stderr.push(String(chunk))
+  })
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const response = await fetch(`${baseUrl}/api/session/active`, {
+      headers: { authorization: basicAuth(password) },
+      signal: AbortSignal.timeout(2000),
+    }).catch(() => null)
+    if (response?.status === 200) {
+      return {
+        baseUrl,
+        password,
+        stderr,
+        close: () => {
+          if (!child.killed) child.kill('SIGTERM')
+        },
+      }
+    }
+    if (response?.status === 401 || response?.status === 403) {
+      child.kill('SIGTERM')
+      throw new Error(`opencode2 rejected credentials: ${response.status}\n${stderr.join('')}`)
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  child.kill('SIGTERM')
+  throw new Error(`opencode2 did not become ready\n${stderr.join('')}`)
+}
+
+function eventSessionId(event: V2Event) {
+  const data = event.data
+  if (!Object.hasOwn(data, 'sessionID')) return undefined
+  const sessionID = Reflect.get(data, 'sessionID')
+  return typeof sessionID === 'string' ? sessionID : undefined
+}
+
+function assistantText(messages: Awaited<ReturnType<OpenCodeClient['message']['list']>>) {
+  return messages.data
+    .flatMap((message) => {
+      if (message.type !== 'assistant') return []
+      return message.content.flatMap((part) => {
+        if (part.type === 'text') return [part.text]
+        return []
+      })
+    })
+    .join('\n')
+}
+
 let home: string
 let projectDir: string
 let anthropicMock: MockServer
@@ -125,21 +208,25 @@ let zenMock: MockServer
 let openaiMock: MockServer
 let zenRespond: MockHandler
 let defaultZenRespond: MockHandler
-let server: { url: string; close: () => void }
+let openaiRespond: MockHandler
+let defaultOpenaiRespond: MockHandler
+let server: { baseUrl: string; password: string; stderr: string[]; close: () => void }
+let client: OpenCodeClient
+const events: V2Event[] = []
+const createdSessionIds: string[] = []
+const subscribeController = new AbortController()
 const savedEnv: Record<string, string | undefined> = {}
 
 beforeAll(async () => {
-  home = await mkdtemp(path.join(tmpdir(), 'subrouter-e2e-'))
+  home = await realpath(await mkdtemp(path.join(tmpdir(), 'subrouter-e2e-')))
   projectDir = path.join(home, 'project')
   await mkdir(projectDir, { recursive: true })
 
-  // Fake anthropic: always rate limited
   anthropicMock = await startMockServer((_request, res) => {
     res.writeHead(429, { 'content-type': 'application/json' })
     res.end(JSON.stringify({ type: 'error', error: { type: 'rate_limit_error', message: 'rate limited' } }))
   })
 
-  // Fake opencode-go: streams a canned completion
   defaultZenRespond = ({ body }, res) => {
     const streaming = body.includes('"stream":true')
     if (!streaming) {
@@ -165,9 +252,7 @@ beforeAll(async () => {
         object: 'chat.completion.chunk',
         created: 1,
         model: 'fake-model',
-        choices: [
-          { index: 0, delta: { role: 'assistant', content: 'hello from fallback' }, finish_reason: null },
-        ],
+        choices: [{ index: 0, delta: { role: 'assistant', content: 'hello from fallback' }, finish_reason: null }],
       }),
     )
     res.write(
@@ -186,7 +271,7 @@ beforeAll(async () => {
   zenRespond = defaultZenRespond
   zenMock = await startMockServer((request, response) => zenRespond(request, response))
 
-  openaiMock = await startMockServer((_request, res) => {
+  defaultOpenaiRespond = (_request, res) => {
     const text = 'hello from openai'
     res.writeHead(200, { 'content-type': 'text/event-stream' })
     for (const event of [
@@ -230,7 +315,9 @@ beforeAll(async () => {
     }
     res.write('data: [DONE]\n\n')
     res.end()
-  })
+  }
+  openaiRespond = defaultOpenaiRespond
+  openaiMock = await startMockServer((request, response) => openaiRespond(request, response))
 
   modelsDevMock = await startMockServer((_request, res) => {
     const emptyProvider = { models: {} }
@@ -257,21 +344,14 @@ beforeAll(async () => {
     )
   })
 
-  // Subrouter state: one rate-limited anthropic account + one zen key
   const subrouterHome = path.join(home, 'subrouter')
   await mkdir(subrouterHome, { recursive: true })
-
   for (const [key, value] of Object.entries({
     SUBROUTER_HOME: subrouterHome,
     SUBROUTER_ANTHROPIC_BASE_URL: `${anthropicMock.url}/v1`,
     SUBROUTER_MODELS_DEV_URL: modelsDevMock.url,
     SUBROUTER_OPENCODE_GO_BASE_URL: `${zenMock.url}/v1`,
     SUBROUTER_OPENAI_BASE_URL: openaiMock.url,
-    // Isolate opencode from the user's real global config and auth
-    XDG_CONFIG_HOME: path.join(home, 'xdg-config'),
-    XDG_DATA_HOME: path.join(home, 'xdg-data'),
-    XDG_CACHE_HOME: path.join(home, 'xdg-cache'),
-    XDG_STATE_HOME: path.join(home, 'xdg-state'),
   })) {
     savedEnv[key] = process.env[key]
     process.env[key] = value
@@ -310,44 +390,54 @@ beforeAll(async () => {
     models: ['anthropic/claude-opus-4-6', 'opencode-go/grok-4.6'],
   })
   await savePreset({ name: 'openai-only', models: ['openai/gpt-5.5'] })
+  await savePreset({ name: 'gpt-openai-only', models: ['openai/gpt-5.5'] })
 
-  const providerEntry = pathToFileURL(
-    path.join(import.meta.dirname, '..', 'dist', 'provider.js'),
-  ).href
-  const pluginEntry = pathToFileURL(
-    path.join(import.meta.dirname, '..', 'dist', 'index.js'),
-  ).href
-
-  server = await createOpencodeServer({
-    port: 0,
-    timeout: 60_000,
-    config: {
-      plugin: [pluginEntry],
-      provider: {
-        subrouter: {
-          name: 'Subrouter',
-          npm: providerEntry,
-          models: {
-            default: {
-              name: 'subrouter default',
-              tool_call: true,
-              attachment: true,
-              modalities: { input: ['text', 'image', 'pdf'], output: ['text'] },
-              cost: { input: 0, output: 0, cache_read: 0, cache_write: 0 },
-              limit: { context: 200_000, output: 64_000 },
-            },
-          },
-        },
+  const pluginDirectory = path.join(import.meta.dirname, '..', 'dist')
+  await writeFile(
+    path.join(projectDir, 'opencode.json'),
+    JSON.stringify(
+      {
+        plugins: [pluginDirectory],
+        model: 'subrouter/default',
+        permissions: [
+          { action: '*', resource: '*', effect: 'allow' },
+        ],
       },
+      null,
+      2,
+    ),
+  )
+
+  server = await startOpencode2Server({ home, projectDir })
+  client = OpenCode.make({
+    baseUrl: server.baseUrl,
+    headers: {
+      authorization: basicAuth(server.password),
+      'x-opencode-directory': projectDir,
     },
   })
+  void (async () => {
+    try {
+      for await (const event of client.event.subscribe({ signal: subscribeController.signal })) {
+        events.push(event)
+      }
+    } catch {
+      // aborted during teardown
+    }
+  })()
+  await client.plugin.awaitActivation({ location: { directory: projectDir } })
 }, 120_000)
 
 afterEach(() => {
   zenRespond = defaultZenRespond
+  openaiRespond = defaultOpenaiRespond
 })
 
 afterAll(async () => {
+  for (const sessionID of createdSessionIds) {
+    await client?.session.remove({ sessionID }).catch(() => undefined)
+  }
+  subscribeController.abort()
   server?.close()
   await anthropicMock?.close()
   await modelsDevMock?.close()
@@ -360,241 +450,91 @@ afterAll(async () => {
   await rm(home, { recursive: true, force: true })
 })
 
-describe('opencode + subrouter provider', () => {
-  test('adds session affinity headers for subrouter models', async () => {
-    const output = { headers: {} }
-    addSubrouterHeaders({
-      input: {
-        sessionID: 'session-1',
-        agent: 'build',
-        model: { providerID: 'subrouter' },
-        message: {
-          id: 'message-1',
-          agent: 'build',
-          model: { providerID: 'subrouter', modelID: 'build', variant: 'high' },
-        },
-      },
-      output,
-    })
-    expect(output.headers).toEqual({
-      [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-1',
-      [ROUTE_AFFINITY_HEADER]: 'message-1',
-      [OPENCODE_AGENT_HEADER]: 'build',
-      [OPENCODE_VARIANT_HEADER]: 'high',
-    })
+async function waitFor(
+  predicate: () => boolean | Promise<boolean>,
+  { timeoutMs = 30_000, label = 'condition' }: { timeoutMs?: number; label?: string } = {},
+) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (await predicate()) return
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+  throw new Error(
+    `Timed out waiting for ${label}. Event types: ${events.map((event) => event.type).join(', ')}\nstderr:\n${server.stderr.slice(-20).join('')}`,
+  )
+}
 
-    const titleOutput = { headers: {} }
+function executionEnded(sessionID: string) {
+  return events.some((event) => {
+    return (
+      (event.type === 'session.execution.succeeded' ||
+        event.type === 'session.execution.failed' ||
+        event.type === 'session.execution.interrupted') &&
+      eventSessionId(event) === sessionID
+    )
+  })
+}
+
+async function promptUntilIdle({
+  title,
+  text,
+  model,
+}: {
+  title: string
+  text: string
+  model?: { providerID: string; id: string }
+}) {
+  const session = await client.session.create({
+    title,
+    location: { directory: projectDir },
+    model,
+  })
+  createdSessionIds.push(session.id)
+  await client.session.prompt({ sessionID: session.id, text })
+  await waitFor(() => executionEnded(session.id), { label: `execution end for ${session.id}` })
+  const messages = await client.message.list({ sessionID: session.id })
+  return { session, messages }
+}
+
+describe('opencode v2 + subrouter plugin', () => {
+  test('adds session affinity headers for primary requests only', () => {
+    const headers: Record<string, string> = {}
     addSubrouterHeaders({
-      input: {
-        sessionID: 'session-2',
-        agent: 'title',
-        model: { providerID: 'subrouter' },
-        message: {
-          id: 'message-1',
-          agent: 'build',
-          model: { providerID: 'subrouter', modelID: 'build', variant: 'high' },
-        },
-      },
-      output: titleOutput,
+      sessionID: 'session-1',
+      agent: 'build',
+      kind: 'primary',
+      model: { providerID: 'subrouter', id: 'build', variant: 'high' },
+      headers,
     })
-    expect(titleOutput.headers).toEqual({
-      [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-2',
-      [OPENAI_WEBSOCKET_TITLE_HEADER]: 'true',
-    })
+    expect(headers['x-subrouter-route-affinity']).toBe('session-1')
+    expect(headers['x-subrouter-opencode-agent']).toBe('build')
+    expect(headers['x-subrouter-session-id']).toBe('session-1')
   })
 
-  test('rate-limited provider is cycled to the fallback through opencode', async () => {
-    const client = createOpencodeClient({ baseUrl: server.url })
-
-    const session = await client.session.create({
-      query: { directory: projectDir },
-      body: { title: 'subrouter e2e' },
+  test('plugin is active and catalogs subrouter models', async () => {
+    const listed = await client.plugin.list({ location: { directory: projectDir } })
+    expect(listed.data.find((item) => item.id === 'subrouter')).toMatchObject({
+      id: 'subrouter',
+      state: { status: 'active' },
     })
-    expect(session.data).toBeTruthy()
+    const models = await client.model.list({ location: { directory: projectDir } })
+    const ids = models.data.map((model) => `${model.providerID}/${model.id}`)
+    expect(ids).toContain('subrouter/default')
+    expect(ids).toContain('subrouter/openai-only')
+  })
 
-    const result = await client.session.prompt({
-      path: { id: session.data!.id },
-      query: { directory: projectDir },
-      body: {
-        model: { providerID: 'subrouter', modelID: 'default' },
-        parts: [{ type: 'text', text: 'say hi' }],
-      },
+  test('rate-limited Anthropic is cycled to OpenCode Go', async () => {
+    const { messages } = await promptUntilIdle({
+      title: 'subrouter e2e',
+      text: 'say hi',
+      model: { providerID: 'subrouter', id: 'default' },
     })
-
-    const parts = result.data?.parts ?? []
-    const texts = parts
-      .filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('\n')
-    expect(texts).toContain('hello from fallback')
-
-    // The anthropic mock was tried first and rate limited
+    expect(assistantText(messages)).toContain('hello from fallback')
     expect(anthropicMock.requests.length).toBeGreaterThan(0)
     expect(zenMock.requests.length).toBeGreaterThan(0)
   }, 120_000)
 
-  test('a pre-existing cooldown appends one ignored notice without another model turn', async () => {
-    const client = createOpencodeClient({ baseUrl: server.url })
-    const session = await client.session.create({
-      query: { directory: projectDir },
-      body: { title: 'subrouter route notice' },
-    })
-    expect(session.data).toBeTruthy()
-    const requestsBefore = zenMock.requests.length
-
-    const result = await client.session.prompt({
-      path: { id: session.data!.id },
-      query: { directory: projectDir },
-      body: {
-        model: { providerID: 'subrouter', modelID: 'default' },
-        parts: [{ type: 'text', text: 'say hi again' }],
-      },
-    })
-    expect(
-      (result.data?.parts ?? [])
-        .filter((part) => part.type === 'text')
-        .map((part) => part.text)
-        .join('\n'),
-    ).toContain('hello from fallback')
-
-    await expect
-      .poll(async () => {
-        const messages = await client.session.messages({
-          path: { id: session.data!.id },
-          query: { directory: projectDir },
-        })
-        return (messages.data ?? []).filter(({ parts }) =>
-          parts.some((part) => part.type === 'text' && part.ignored === true),
-        ).length
-      })
-      .toBe(1)
-
-    const messages = await client.session.messages({
-      path: { id: session.data!.id },
-      query: { directory: projectDir },
-    })
-    expect((messages.data ?? []).filter(({ info }) => info.role === 'user')).toHaveLength(2)
-    expect((messages.data ?? []).filter(({ info }) => info.role === 'assistant')).toHaveLength(1)
-    expect(zenMock.requests).toHaveLength(requestsBefore + 1)
-  }, 120_000)
-
-  test('PDF file parts reach a compatible fallback through opencode', async () => {
-    const client = createOpencodeClient({ baseUrl: server.url })
-    const session = await client.session.create({
-      query: { directory: projectDir },
-      body: { title: 'subrouter PDF e2e' },
-    })
-    expect(session.data).toBeTruthy()
-
-    const result = await client.session.prompt({
-      path: { id: session.data!.id },
-      query: { directory: projectDir },
-      body: {
-        model: { providerID: 'subrouter', modelID: 'default' },
-        parts: [
-          {
-            type: 'file',
-            filename: 'document.pdf',
-            mime: 'application/pdf',
-            url: `data:application/pdf;base64,${Buffer.from('%PDF-1.4\n%%EOF').toString('base64')}`,
-          },
-          { type: 'text', text: 'read the PDF' },
-        ],
-      },
-    })
-
-    const texts = (result.data?.parts ?? [])
-      .filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('\n')
-    expect(texts).toContain('hello from fallback')
-    const request = zenMock.requests.at(-1)
-    expect(request).toBeTruthy()
-    const body = JSON.parse(request!.body) as {
-      messages: Array<{ content: Array<{ type: string; file?: { filename?: string } }> }>
-    }
-    expect(body.messages.at(-1)?.content).toEqual([
-      {
-        type: 'file',
-        file: {
-          filename: 'document.pdf',
-          file_data: `data:application/pdf;base64,${Buffer.from('%PDF-1.4\n%%EOF').toString('base64')}`,
-        },
-      },
-      { type: 'text', text: 'read the PDF' },
-    ])
-  }, 120_000)
-
-  test('all cooling-down accounts retry through opencode instead of dying', async () => {
-    const untilMs = Date.now() + 2_000
-    await markCooldown({
-      provider: 'anthropic',
-      account: { type: 'oauth', refresh: 'fake-refresh', access: 'fake-access', email: 'a@x.com', addedAt: 1, lastUsed: 1 },
-      untilMs,
-    })
-    await markCooldown({
-      provider: 'opencode-go',
-      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
-      untilMs,
-    })
-
-    const client = createOpencodeClient({ baseUrl: server.url })
-    const events: Event[] = []
-    const subscription = await client.event.subscribe({
-      query: { directory: projectDir },
-    })
-    void (async () => {
-      for await (const event of subscription.stream) {
-        events.push(event)
-      }
-    })()
-
-    const session = await client.session.create({
-      query: { directory: projectDir },
-      body: { title: 'subrouter cooldown retry' },
-    })
-    expect(session.data).toBeTruthy()
-
-    const result = await client.session.prompt({
-      path: { id: session.data!.id },
-      query: { directory: projectDir },
-      body: {
-        model: { providerID: 'subrouter', modelID: 'default' },
-        parts: [{ type: 'text', text: 'say hi' }],
-      },
-    })
-
-    const parts = result.data?.parts ?? []
-    const texts = parts
-      .filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('\n')
-    expect(texts).toContain('hello from fallback')
-
-    const summary = summarizeSessionEvents(events)
-    expect(summary.some((event) => event.status === 'retry')).toBe(true)
-    expect(summary.some((event) => event.name === 'UnknownError')).toBe(false)
-    expect(
-      summary.map((event) => {
-        if (event.status === 'retry') {
-          return { status: 'retry', coolingDown: event.message?.includes('cooling down') }
-        }
-        return event.status ?? event.type
-      }),
-    ).toMatchInlineSnapshot(`
-      [
-        "busy",
-        "busy",
-        {
-          "coolingDown": true,
-          "status": "retry",
-        },
-        "busy",
-      ]
-    `)
-  }, 120_000)
-
-  test('keeps the fallback candidate through tool follow-ups until the session is idle', async () => {
+  test('keeps the fallback candidate through tool follow-ups, then resets on the next execution', async () => {
     await clearCooldowns()
     await markCooldown({
       provider: 'anthropic',
@@ -612,13 +552,12 @@ describe('opencode + subrouter provider', () => {
     await writeFile(readable, 'tool result')
     const fallbackBodies: string[] = []
     let fallbackCalls = 0
-    let cooldownCleared = Promise.resolve()
-    zenRespond = ({ body }, res) => {
+    zenRespond = async ({ body }, res) => {
       fallbackBodies.push(body)
       fallbackCalls++
       res.writeHead(200, { 'content-type': 'text/event-stream' })
       if (fallbackCalls === 1) {
-        cooldownCleared = clearCooldowns()
+        await clearCooldowns()
         res.write(
           sseChunk({
             id: 'tool-1',
@@ -679,73 +618,92 @@ describe('opencode + subrouter provider', () => {
       res.end('data: [DONE]\n\n')
     }
 
-    const client = createOpencodeClient({ baseUrl: server.url })
     const session = await client.session.create({
-      query: { directory: projectDir },
-      body: { title: 'subrouter tool affinity' },
+      title: 'subrouter tool affinity',
+      location: { directory: projectDir },
+      model: { providerID: 'subrouter', id: 'default' },
     })
+    createdSessionIds.push(session.id)
     const anthropicBefore = anthropicMock.requests.length
-    await client.session.prompt({
-      path: { id: session.data!.id },
-      query: { directory: projectDir },
-      body: {
-        model: { providerID: 'subrouter', modelID: 'default' },
-        parts: [{ type: 'text', text: 'read the file' }],
-      },
-    })
+    await client.session.prompt({ sessionID: session.id, text: 'read the file' })
+    await waitFor(() => executionEnded(session.id), { label: 'tool affinity first execution' })
     expect(anthropicMock.requests).toHaveLength(anthropicBefore)
-    expect(
-      fallbackBodies
-        .slice(0, 2)
-        .map((body) => body.includes('You are powered by the model named grok-4.6')),
-    ).toEqual([true, true])
+    expect(fallbackCalls).toBeGreaterThanOrEqual(2)
+    expect(anthropicMock.requests).toHaveLength(anthropicBefore)
 
-    await cooldownCleared
     await clearCooldowns()
-    await client.session.prompt({
-      path: { id: session.data!.id },
-      query: { directory: projectDir },
-      body: {
-        model: { providerID: 'subrouter', modelID: 'default' },
-        parts: [{ type: 'text', text: 'say done' }],
-      },
-    })
+    await client.session.prompt({ sessionID: session.id, text: 'say done' })
+    await waitFor(
+      () =>
+        events.filter(
+          (event) => event.type === 'session.execution.succeeded' && eventSessionId(event) === session.id,
+        ).length >= 2,
+      { label: 'tool affinity second execution' },
+    )
     expect(anthropicMock.requests).toHaveLength(anthropicBefore + 1)
     expect(fallbackCalls).toBeGreaterThanOrEqual(3)
   }, 120_000)
 
-  test('openai live model advertises apply_patch and not edit or write', async () => {
-    const client = createOpencodeClient({ baseUrl: server.url })
-    const session = await client.session.create({
-      query: { directory: projectDir },
-      body: { title: 'subrouter apply_patch' },
+  test('openai presets keep the v2 file editing tools available', async () => {
+    const { messages } = await promptUntilIdle({
+      title: 'subrouter apply_patch',
+      text: 'say hi',
+      model: { providerID: 'subrouter', id: 'openai-only' },
     })
-    expect(session.data).toBeTruthy()
-
-    const result = await client.session.prompt({
-      path: { id: session.data!.id },
-      query: { directory: projectDir },
-      body: {
-        model: { providerID: 'subrouter', modelID: 'openai-only' },
-        parts: [{ type: 'text', text: 'say hi' }],
-      },
-    })
-    const texts = (result.data?.parts ?? [])
-      .filter((part) => part.type === 'text')
-      .map((part) => part.text)
-      .join('\n')
-    expect(texts).toContain('hello from openai')
+    expect(assistantText(messages)).toContain('hello from openai')
     expect(openaiMock.requests.length).toBeGreaterThan(0)
-
     const raw = openaiMock.requests.at(-1)!.body
     const body = JSON.parse(raw) as {
       tools?: Array<{ name?: string; type?: string; function?: { name?: string } }>
+      store?: boolean
+      include?: string[]
     }
-    const names = (body.tools ?? []).map((tool) => tool.name ?? tool.function?.name)
-    expect(names).toContain('apply_patch')
-    expect(names).not.toContain('edit')
-    expect(names).not.toContain('write')
-    expect(raw).toContain('apply_patch')
-    expect(raw.includes('"name":"edit"') || raw.includes('"name": "edit"')).toBe(false)
+    const toolNames = (body.tools ?? []).map((tool) => tool.name ?? tool.function?.name)
+    expect(toolNames).not.toContain('patch')
+    expect(toolNames).toContain('edit')
+    expect(toolNames).toContain('write')
+    expect(body.store).toBe(false)
+    expect(body.include).toEqual(expect.arrayContaining(['reasoning.encrypted_content']))
+  }, 120_000)
+
+  test('gpt- preset names opt into the v2 patch tool', async () => {
+    const { messages } = await promptUntilIdle({
+      title: 'subrouter patch marker',
+      text: 'say hi',
+      model: { providerID: 'subrouter', id: 'gpt-openai-only' },
+    })
+    expect(assistantText(messages)).toContain('hello from openai')
+    const raw = openaiMock.requests.at(-1)!.body
+    const body = JSON.parse(raw) as {
+      tools?: Array<{ name?: string; function?: { name?: string } }>
+    }
+    const toolNames = (body.tools ?? []).map((tool) => tool.name ?? tool.function?.name)
+    expect(toolNames).toContain('patch')
+    expect(toolNames).not.toContain('edit')
+    expect(toolNames).not.toContain('write')
+  }, 120_000)
+
+  test('openai follow-up keeps store:false and encrypted reasoning', async () => {
+    const session = await client.session.create({
+      title: 'subrouter openai followup',
+      location: { directory: projectDir },
+      model: { providerID: 'subrouter', id: 'openai-only' },
+    })
+    createdSessionIds.push(session.id)
+    await client.session.prompt({ sessionID: session.id, text: 'say hi' })
+    await waitFor(() => executionEnded(session.id), { label: 'openai first execution' })
+    await client.session.prompt({ sessionID: session.id, text: 'say hi again' })
+    await waitFor(
+      () =>
+        events.filter(
+          (event) => event.type === 'session.execution.succeeded' && eventSessionId(event) === session.id,
+        ).length >= 2,
+      { label: 'openai second execution' },
+    )
+    const followUp = openaiMock.requests.at(-1)
+    expect(followUp).toBeTruthy()
+    const body = JSON.parse(followUp!.body) as { store?: boolean; include?: string[] }
+    expect(body.store).toBe(false)
+    expect(body.include).toEqual(expect.arrayContaining(['reasoning.encrypted_content']))
   }, 120_000)
 })

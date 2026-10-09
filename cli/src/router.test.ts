@@ -816,7 +816,10 @@ describe('RouterModel failover', () => {
 
     await new RouterModel({ preset: 'test' }).doGenerate({
       ...callOptions,
-      headers: { [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-1' },
+      headers: {
+        [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-1',
+        [ROUTE_AFFINITY_HEADER]: 'session-1',
+      },
     })
     await clearCooldowns()
 
@@ -826,6 +829,32 @@ describe('RouterModel failover', () => {
       modelId: 'fake-model',
     })
     expect(await resolveLiveModel({ preset: 'test' })).toMatchObject({
+      provider: 'anthropic',
+      modelId: 'claude-fake',
+    })
+  })
+
+  test('auxiliary requests do not replace the live session route', async () => {
+    const anthropicMock = await startMockServer(() => anthropic429)
+    const opencodeMock = await startMockServer(() => chatCompletionOk('fallback'))
+    servers = [anthropicMock, opencodeMock]
+    process.env.SUBROUTER_ANTHROPIC_BASE_URL = `${anthropicMock.url}/v1`
+    process.env.SUBROUTER_OPENCODE_GO_BASE_URL = `${opencodeMock.url}/v1`
+
+    await addAccount({ provider: 'anthropic', account: oauthAccount({ email: 'a@x.com' }) })
+    await addAccount({
+      provider: 'opencode-go',
+      account: { type: 'api', key: 'zen-key', addedAt: 1, lastUsed: 1 },
+    })
+    await savePreset({ name: 'test', models: ['anthropic/claude-fake', 'opencode-go/fake-model'] })
+
+    await new RouterModel({ preset: 'test' }).doGenerate({
+      ...callOptions,
+      headers: { [OPENAI_WEBSOCKET_SESSION_HEADER]: 'session-1' },
+    })
+    await clearCooldowns()
+
+    expect(await resolveLiveModel({ preset: 'test', sessionID: 'session-1' })).toMatchObject({
       provider: 'anthropic',
       modelId: 'claude-fake',
     })
