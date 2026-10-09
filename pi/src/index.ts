@@ -10,7 +10,8 @@ import {
   type AssistantMessage,
   type AssistantMessageEvent,
   type AssistantMessageEventStream,
-  type Context,
+  type Message,
+  type TranscriptContext,
   type Model,
   type Provider,
   type ProviderResponse,
@@ -273,6 +274,34 @@ function sanitizePiAnthropicSystemPrompt({ text, log }: { text: string; log?: Su
   return nextSection === -1 ? head : head + afterDocs.slice(nextSection)
 }
 
+// Pi 1.0 no longer passes a rendered `systemPrompt` string. The prompt arrives
+// as system messages: `content` plus named `sections` (preamble, tools, rules,
+// docs, cwd, ...), and later system messages can replace or remove sections.
+// The `docs` section is what Anthropic OAuth classifies as a third-party app;
+// verified against the live API, dropping it alone is enough. The identity
+// phrase is still removed from the preamble, matching the string path above.
+// String `content` (a custom or forced prompt) goes through the string path.
+function sanitizePiAnthropicMessages({ messages, log }: { messages: Message[]; log?: SubrouterLog }): Message[] {
+  return messages.map((message) => {
+    if (message.role !== 'system') return message
+    const sections = message.sections
+      ? Object.fromEntries(
+          Object.entries(message.sections)
+            .filter(([name]) => name !== 'docs')
+            .map(([name, value]) => [
+              name,
+              name === 'preamble' && typeof value === 'string' ? value.replace(PI_HARNESS_IDENTITY, '') : value,
+            ]),
+        )
+      : undefined
+    const content =
+      typeof message.content === 'string' && message.content
+        ? sanitizePiAnthropicSystemPrompt({ text: message.content, log })
+        : message.content
+    return { ...message, content, ...(sections && { sections }) }
+  })
+}
+
 async function recordCooldown({ candidate, cooldownMs }: { candidate: Candidate; cooldownMs: number }) {
   await markCooldown({
     provider: candidate.provider,
@@ -291,7 +320,7 @@ function streamPreset({
   log,
 }: {
   model: Model<Api>
-  context: Context
+  context: TranscriptContext
   options?: StreamOptions & { reasoning?: SimpleStreamOptions['reasoning'] }
   providers: Map<string, Provider>
   affinity: RouteAffinity
@@ -374,10 +403,10 @@ function streamPreset({
       const usesBearerHeader = candidate.provider === 'minimax' || candidate.provider === 'kimi'
       // pi-ai uses apiKey.includes("sk-ant-oat"), not startsWith.
       const anthropicOAuth = candidate.provider === 'anthropic' && apiKey.includes('sk-ant-oat')
-      const routedContext =
-        anthropicOAuth && context.systemPrompt
-          ? { ...context, systemPrompt: sanitizePiAnthropicSystemPrompt({ text: context.systemPrompt, log }) }
-          : context
+      // TranscriptContext's brand is type-only; the copy is the same shape.
+      const routedContext = anthropicOAuth
+        ? ({ ...context, messages: sanitizePiAnthropicMessages({ messages: context.messages, log }) } as TranscriptContext)
+        : context
       const headers = { ...options?.headers }
       if (usesBearerHeader) headers.authorization = `Bearer ${apiKey}`
       if (candidate.provider === 'opencode-go') {
