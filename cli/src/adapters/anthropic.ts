@@ -671,7 +671,7 @@ function buildFetch({ account, persist }: { account: StoredAccount; persist: Per
 export const anthropicAdapter: ProviderAdapter = {
   id: 'anthropic',
   name: 'Anthropic (Claude Pro/Max)',
-  defaultModels: ['claude-opus-5-5', 'claude-sonnet-4-6'],
+  defaultModels: ['claude-opus-5-5', 'claude-sonnet-5-5'],
   baseUrlEnvVar: 'SUBROUTER_ANTHROPIC_BASE_URL',
   createModel({ modelId, account, persist }) {
     const provider = createAnthropic({
